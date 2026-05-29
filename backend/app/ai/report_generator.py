@@ -58,6 +58,42 @@ def _fetch_disaster_events(db: Session, analysis_id: int) -> list[dict]:
     return [dict(r._mapping) for r in rows]
 
 
+def _fetch_screenshots(db: Session, analysis_id: int, report_type: str) -> list[dict]:
+    """Fetch screenshot paths with timestamps for embedding in report."""
+    if report_type == "disaster":
+        rows = db.execute(
+            text("""
+                SELECT screenshot_path, timestamp, disaster_type, severity, confidence
+                FROM disaster_events
+                WHERE analysis_id = :id AND screenshot_path IS NOT NULL
+                ORDER BY severity DESC
+            """),
+            {"id": analysis_id}
+        ).fetchall()
+        return [dict(r._mapping) for r in rows]
+    else:
+        rows = db.execute(
+            text("""
+                SELECT DISTINCT screenshot_path, timestamp, label, confidence
+                FROM detections
+                WHERE analysis_id = :id AND screenshot_path IS NOT NULL
+                ORDER BY confidence DESC
+                LIMIT 8
+            """),
+            {"id": analysis_id}
+        ).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+
+def _resolve_screenshot_path(rel_path: str) -> Optional[str]:
+    """Convert /screenshots/filename.jpg to absolute filesystem path."""
+    if not rel_path:
+        return None
+    filename = os.path.basename(rel_path)
+    abs_path = os.path.join(settings.SCREENSHOTS_DIR, filename)
+    return abs_path if os.path.exists(abs_path) else None
+
+
 def _category_summary(detections: list[dict]) -> dict:
     """Groups detections by category and counts them."""
     summary = {}
@@ -79,7 +115,7 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
     from reportlab.lib import colors
     from reportlab.platypus import (
         SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-        HRFlowable, KeepTogether
+        HRFlowable, KeepTogether, Image as RLImage
     )
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
@@ -265,6 +301,48 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
             )
         story.append(Paragraph(rec_text, body_style))
 
+        # ── Screenshots Section ──
+        screenshots = _fetch_screenshots(db, analysis_id, "mapping")
+        if screenshots:
+            story.append(Spacer(1, 0.4*cm))
+            story.append(Paragraph("Detection Screenshots", heading_style))
+            story.append(Paragraph(
+                "Annotated frames captured during AI analysis. Timestamp shown on each image indicates exact position in the video.",
+                body_style
+            ))
+            story.append(Spacer(1, 0.3*cm))
+            # 2 screenshots per row
+            img_pairs = [screenshots[i:i+2] for i in range(0, len(screenshots), 2)]
+            for pair in img_pairs:
+                row_items = []
+                for shot in pair:
+                    abs_path = _resolve_screenshot_path(shot.get("screenshot_path", ""))
+                    if abs_path:
+                        try:
+                            img = RLImage(abs_path, width=8*cm, height=5*cm)
+                            ts = shot.get('timestamp', 0)
+                            label = shot.get('label', 'Detection')
+                            conf = shot.get('confidence', 0)
+                            caption = f"{label[:30]} | {conf:.0%} conf | T={ts:.1f}s"
+                            row_items.append([img, Paragraph(caption, label_style)])
+                        except Exception:
+                            pass
+                if row_items:
+                    if len(row_items) == 2:
+                        tbl = Table([[row_items[0][0], row_items[1][0]],
+                                     [row_items[0][1], row_items[1][1]]],
+                                    colWidths=[8.5*cm, 8.5*cm])
+                    else:
+                        tbl = Table([[row_items[0][0]], [row_items[0][1]]], colWidths=[17*cm])
+                    tbl.setStyle(TableStyle([
+                        ("ALIGN", (0,0), (-1,-1), "CENTER"),
+                        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                        ("TOPPADDING", (0,0), (-1,-1), 4),
+                        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                    ]))
+                    story.append(tbl)
+                    story.append(Spacer(1, 0.3*cm))
+
     # ── DISASTER REPORT CONTENT ──
     else:
         events = _fetch_disaster_events(db, analysis_id)
@@ -311,7 +389,28 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
                     ("ROWBACKGROUNDS", (0, 0), (-1, -1),
                      [colors.HexColor("#0c1017"), colors.HexColor("#0a0e16")]),
                 ]))
-                story.append(KeepTogether([ev_table, Spacer(1, 0.4*cm)]))
+
+                # Embed screenshot for this event if available
+                block = [ev_table, Spacer(1, 0.2*cm)]
+                abs_path = _resolve_screenshot_path(event.get("screenshot_path", ""))
+                if abs_path:
+                    try:
+                        img = RLImage(abs_path, width=12*cm, height=7*cm)
+                        ts = event.get('timestamp', 0)
+                        dtype = event.get('disaster_type', '').upper()
+                        caption = Paragraph(
+                            f"Screenshot: {dtype} detected at T={ts:.1f}s | "
+                            f"Severity: {sev_info['label']} | "
+                            f"Confidence: {event.get('confidence', 0):.0%}",
+                            ParagraphStyle("Caption", parent=styles["Normal"],
+                                           fontSize=8, textColor=sev_color,
+                                           alignment=TA_CENTER)
+                        )
+                        block += [img, caption, Spacer(1, 0.2*cm)]
+                    except Exception:
+                        pass
+
+                story.append(KeepTogether(block + [Spacer(1, 0.4*cm)]))
 
     # ── Footer ──
     story.append(Spacer(1, 0.5*cm))
@@ -479,6 +578,26 @@ def generate_docx(analysis_id: int, report_type: str, db: Session) -> str:
             )
         add_para(rec)
 
+        # ── Screenshots ──
+        screenshots = _fetch_screenshots(db, analysis_id, "mapping")
+        if screenshots:
+            doc.add_paragraph()
+            add_heading("Detection Screenshots", level=3, color_hex="22c55e")
+            add_para("Annotated frames captured during AI analysis. Timestamp on each image indicates exact position in the video.")
+            for shot in screenshots:
+                abs_path = _resolve_screenshot_path(shot.get("screenshot_path", ""))
+                if abs_path:
+                    try:
+                        ts = shot.get('timestamp', 0)
+                        label = shot.get('label', 'Detection')
+                        conf = shot.get('confidence', 0)
+                        doc.add_picture(abs_path, width=Cm(14))
+                        add_para(f"{label[:40]} | Confidence: {conf:.0%} | Timestamp: T={ts:.1f}s",
+                                 color_hex="64748b")
+                        doc.add_paragraph()
+                    except Exception:
+                        pass
+
     else:
         events = _fetch_disaster_events(db, analysis_id)
         add_heading("Disaster Events Detected", level=3, color_hex="ef4444")
@@ -512,6 +631,23 @@ def generate_docx(analysis_id: int, report_type: str, db: Session) -> str:
                 ]
                 for label, value in rows_data:
                     add_table_row(ev_table, [label, value])
+
+                # Embed screenshot for this event
+                abs_path = _resolve_screenshot_path(event.get("screenshot_path", ""))
+                if abs_path:
+                    try:
+                        doc.add_paragraph()
+                        doc.add_picture(abs_path, width=Cm(14))
+                        ts = event.get('timestamp', 0)
+                        dtype = event.get('disaster_type', '').upper()
+                        add_para(
+                            f"Screenshot: {dtype} at T={ts:.1f}s | "
+                            f"{sev_info['label']} | "
+                            f"Confidence: {event.get('confidence', 0):.0%}",
+                            color_hex=hex_c
+                        )
+                    except Exception:
+                        pass
                 doc.add_paragraph()
 
     # Footer

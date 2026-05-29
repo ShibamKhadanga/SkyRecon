@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     SCREENSHOTS_DIR: str = "./screenshots"
 
     # AI Settings
-    YOLO_MODEL: str = "yolov8n.pt"
+    YOLO_MODEL: str = "yolov8s.pt"
     CONFIDENCE_THRESHOLD: float = 0.5
 
     # CORS

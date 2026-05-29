@@ -76,11 +76,14 @@ export default function DisasterPage() {
 
   const triggerVoiceSpeech = (events) => {
     if (!window.speechSynthesis || !voiceAlertsEnabled) return
-    const critical = events.filter(e => e.severity >= 4)
-    const floods = events.filter(e => e.disaster_type === 'flood')
+    // Only speak for genuinely critical fire or flood events at severity >= 4
+    const critical = events.filter(e => (e.disaster_type === 'fire' || e.disaster_type === 'flood') && e.severity >= 4)
+    if (critical.length === 0) return
     let text = 'Attention. SkyRecon disaster assessment complete. '
+    const fires = critical.filter(e => e.disaster_type === 'fire')
+    const floods = critical.filter(e => e.disaster_type === 'flood')
+    if (fires.length > 0) text += 'Critical fire detected. Deploy fire suppression units immediately. '
     if (floods.length > 0) text += 'Critical flood zone detected. Emergency evacuation required immediately. '
-    if (critical.length > 0) text += `Warning. ${critical.length} high severity incidents identified. Dispatch emergency crews. `
     const u = new SpeechSynthesisUtterance(text)
     u.rate = 0.92
     window.speechSynthesis.speak(u)
@@ -114,7 +117,12 @@ export default function DisasterPage() {
         try {
           const sr = await fetch(`/api/v1/analysis/${data.id}/status`)
           const sd = await sr.json()
-          setScanProgress(prev => Math.min(prev + 4, 90))
+          // Use real progress from backend
+          if (typeof sd.progress === 'number' && sd.progress > 0) {
+            setScanProgress(sd.progress)
+          } else if (sd.status === 'processing') {
+            setScanProgress(prev => Math.min(prev + 2, 90))
+          }
           if (sd.status === 'completed') {
             clearInterval(pollRef.current)
             setScanProgress(100)
@@ -404,7 +412,9 @@ export default function DisasterPage() {
                   <div className="mt-4 p-3 rounded-lg bg-red-500/5 border border-red-500/10 flex items-start gap-2">
                     <Shield size={16} className="text-red-400 flex-shrink-0 mt-0.5" />
                     <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
-                      Rescue priority assigned: <span className="font-bold text-white uppercase">Sector 4 Flood Plain (CRITICAL LEVEL 5)</span>. Evacuation voice alarms broadcasted immediately to surrounding nodes.
+                      {realEvents.length > 0
+                        ? `${realEvents.length} incident(s) confirmed. Highest severity: Level ${Math.max(...realEvents.map(e => e.severity))}. Dispatch resources as estimated above.`
+                        : 'No confirmed disaster events detected in this footage. Area appears safe.'}
                     </p>
                   </div>
                 </GlassCard>

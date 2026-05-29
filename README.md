@@ -147,7 +147,7 @@ On first startup the server will:
 4. Seed the 25 default detection categories
 5. Seed sample analyses/detections if the DB is empty
 
-YOLOv8 model weights (`yolov8n.pt`, ~6MB) download automatically on first analysis run.
+YOLOv8 model weights (`yolov8s.pt`, ~22MB) download automatically on first analysis run.
 
 ---
 
@@ -160,7 +160,7 @@ YOLOv8 model weights (`yolov8n.pt`, ~6MB) download automatically on first analys
 | `DB_NAME` | `skyrecon` | Database name |
 | `DB_USER` | `postgres` | Database user |
 | `DB_PASSWORD` | `postgres` | Database password |
-| `YOLO_MODEL` | `yolov8n.pt` | Model weights — use `yolov8s.pt` or `yolov8m.pt` for better accuracy |
+| `YOLO_MODEL` | `yolov8s.pt` | Model weights — use `yolov8s.pt` or `yolov8m.pt` for better accuracy |
 | `CONFIDENCE_THRESHOLD` | `0.5` | Minimum detection confidence (0.0–1.0) |
 | `UPLOAD_DIR` | `./uploads` | Where uploaded videos are saved |
 | `REPORTS_DIR` | `./reports` | Where generated reports are saved |

@@ -44,7 +44,12 @@ def _run_mapping_task(
             db=db,
         )
     except Exception as e:
-        logger.error(f"[BG] Mapping task failed for analysis {analysis_id}: {e}")
+        logger.error(f"[BG] Mapping task failed for analysis {analysis_id}: {e}", exc_info=True)
+        try:
+            db.execute(text("UPDATE analyses SET status='failed' WHERE id=:id"), {"id": analysis_id})
+            db.commit()
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -60,7 +65,12 @@ def _run_disaster_task(analysis_id: int, video_path: str):
             db=db,
         )
     except Exception as e:
-        logger.error(f"[BG] Disaster task failed for analysis {analysis_id}: {e}")
+        logger.error(f"[BG] Disaster task failed for analysis {analysis_id}: {e}", exc_info=True)
+        try:
+            db.execute(text("UPDATE analyses SET status='failed' WHERE id=:id"), {"id": analysis_id})
+            db.commit()
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -108,10 +118,12 @@ async def upload_video(
     allowed_types = [
         "video/mp4", "video/quicktime", "video/x-msvideo",
         "video/x-matroska", "video/webm",
-        "image/jpeg", "image/png",
+        "image/jpeg", "image/png", "image/webp", "image/bmp",
     ]
     if file.content_type not in allowed_types:
-        raise HTTPException(400, f"Unsupported file type: {file.content_type}")
+        raise HTTPException(400, f"Unsupported file type: {file.content_type}. Supported: MP4, MOV, AVI, MKV, WebM, JPG, PNG, WebP")
+
+    is_image = file.content_type.startswith("image/")
 
     # Save uploaded file
     file_id = str(uuid.uuid4())
@@ -174,18 +186,35 @@ async def upload_video(
 
 @router.get("/{analysis_id}/status")
 def get_status(analysis_id: int, db: Session = Depends(get_db)):
-    """Poll this endpoint to track processing progress."""
+    """Poll this endpoint to track real processing progress."""
     row = db.execute(
-        text("SELECT status, total_objects, processing_time FROM analyses WHERE id=:id"),
+        text("SELECT status, total_objects, processing_time, description FROM analyses WHERE id=:id"),
         {"id": analysis_id}
     ).first()
     if not row:
         raise HTTPException(404, "Analysis not found")
+
+    # Extract real progress % written by the AI engine into description field
+    progress = 0
+    if row.description and "||PROGRESS||" in row.description:
+        try:
+            progress = int(row.description.split("||PROGRESS||")[-1])
+        except Exception:
+            progress = 0
+
+    if row.status == "completed":
+        progress = 100
+    elif row.status == "failed":
+        progress = 0
+    elif row.status == "processing":
+        progress = max(5, progress)
+
     return {
         "analysis_id": analysis_id,
         "status": row.status,
         "total_objects": row.total_objects,
         "processing_time": row.processing_time,
+        "progress": progress,
     }
 
 
@@ -267,7 +296,7 @@ def get_summary(analysis_id: int, db: Session = Depends(get_db)):
         "location": analysis.location,
         "drone_model": analysis.drone_model,
         "detection_mode": analysis.detection_mode,
-        "total_detections": len(det_list),
+        "total_detections": analysis.total_objects,  # authoritative unique count from tracker
         "processing_time": analysis.processing_time,
         "coverage": coverage,
         "category_breakdown": cat_counts,
@@ -348,6 +377,58 @@ def download_report(report_id: int, db: Session = Depends(get_db)):
 
 
 # ── Standard CRUD ──────────────────────────────────────────────────────────────
+
+@router.get("/reports/", tags=["Reports"])
+def list_all_reports(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """Returns all reports joined with analysis metadata for the Reports page."""
+    rows = db.execute(
+        text("""
+            SELECT r.id, r.analysis_id, r.title, r.report_type, r.format,
+                   r.status, r.file_path, r.created_at,
+                   a.project_name, a.total_objects, a.processing_time, a.detection_mode
+            FROM reports r
+            LEFT JOIN analyses a ON r.analysis_id = a.id
+            ORDER BY r.created_at DESC
+            LIMIT :limit OFFSET :skip
+        """),
+        {"limit": limit, "skip": skip}
+    ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r._mapping)
+        d["title"] = d["title"] or d.get("project_name") or f"Analysis #{d['analysis_id']}"
+        result.append(d)
+
+    # Also include completed analyses that have no report record yet
+    existing_aids = {r["analysis_id"] for r in result}
+    orphans = db.execute(
+        text("""
+            SELECT id, project_name, total_objects, processing_time,
+                   detection_mode, completed_at, created_at
+            FROM analyses
+            WHERE status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT :limit
+        """),
+        {"limit": limit}
+    ).fetchall()
+    for a in orphans:
+        if a.id not in existing_aids:
+            result.append({
+                "id": None,
+                "analysis_id": a.id,
+                "title": a.project_name or f"Analysis #{a.id}",
+                "report_type": "disaster" if a.detection_mode == "disaster" else "mapping",
+                "format": "pdf",
+                "status": "ready",
+                "file_path": None,
+                "created_at": a.completed_at or a.created_at,
+                "total_objects": a.total_objects or 0,
+                "processing_time": a.processing_time,
+                "detection_mode": a.detection_mode,
+            })
+    return result
+
 
 @router.get("/{analysis_id}", response_model=AnalysisResponse)
 def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
