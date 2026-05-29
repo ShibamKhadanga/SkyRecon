@@ -1,5 +1,5 @@
-"""
-SkyRecon – Report Generator
+﻿"""
+SkyRecon â€“ Report Generator
 Generates real PDF and DOCX reports from actual detection/disaster data.
 """
 
@@ -18,11 +18,11 @@ logger = logging.getLogger(__name__)
 
 # Severity colors (RGB tuples for reportlab, hex for docx)
 SEVERITY_COLORS = {
-    1: {"rgb": (34, 197, 94),   "hex": "22c55e", "label": "Level 1 – Minor"},
-    2: {"rgb": (132, 204, 22),  "hex": "84cc16", "label": "Level 2 – Low"},
-    3: {"rgb": (234, 179, 8),   "hex": "eab308", "label": "Level 3 – Moderate"},
-    4: {"rgb": (249, 115, 22),  "hex": "f97316", "label": "Level 4 – High"},
-    5: {"rgb": (239, 68, 68),   "hex": "ef4444", "label": "Level 5 – Critical"},
+    1: {"rgb": (34, 197, 94),   "hex": "22c55e", "label": "Level 1 â€“ Minor"},
+    2: {"rgb": (132, 204, 22),  "hex": "84cc16", "label": "Level 2 â€“ Low"},
+    3: {"rgb": (234, 179, 8),   "hex": "eab308", "label": "Level 3 â€“ Moderate"},
+    4: {"rgb": (249, 115, 22),  "hex": "f97316", "label": "Level 4 â€“ High"},
+    5: {"rgb": (239, 68, 68),   "hex": "ef4444", "label": "Level 5 â€“ Critical"},
 }
 
 
@@ -103,9 +103,9 @@ def _category_summary(detections: list[dict]) -> dict:
     return dict(sorted(summary.items(), key=lambda x: x[1], reverse=True))
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  PDF GENERATOR
-# ══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
     """Generates a PDF report and returns the file path."""
@@ -154,7 +154,7 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
 
     story = []
 
-    # ── Header ──
+    # â”€â”€ Header â”€â”€
     story.append(Paragraph("SKYRECON", title_style))
     story.append(Paragraph("AI Powered Drone Intelligence Platform", subtitle_style))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#22c55e"), spaceAfter=12))
@@ -163,19 +163,19 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
     story.append(Paragraph(report_title, heading_style))
     story.append(Spacer(1, 0.3*cm))
 
-    # ── Project Info Table ──
+    # â”€â”€ Project Info Table â”€â”€
     created_at = analysis.get("created_at")
     completed_at = analysis.get("completed_at")
     proc_time = analysis.get("processing_time")
 
     info_data = [
-        ["Project Name", analysis.get("project_name", "—")],
-        ["Location", analysis.get("location") or "—"],
-        ["Drone Model", analysis.get("drone_model") or "—"],
+        ["Project Name", analysis.get("project_name", "â€”")],
+        ["Location", analysis.get("location") or "â€”"],
+        ["Drone Model", analysis.get("drone_model") or "â€”"],
         ["Detection Mode", analysis.get("detection_mode", "standard").upper()],
-        ["Analysis Date", created_at.strftime("%d %b %Y, %H:%M") if created_at else "—"],
-        ["Processing Time", f"{proc_time:.1f} seconds" if proc_time else "—"],
-        ["Status", analysis.get("status", "—").upper()],
+        ["Analysis Date", created_at.strftime("%d %b %Y, %H:%M") if created_at else "â€”"],
+        ["Processing Time", f"{proc_time:.1f} seconds" if proc_time else "â€”"],
+        ["Status", analysis.get("status", "â€”").upper()],
     ]
     if analysis.get("description"):
         info_data.append(["Description", analysis["description"]])
@@ -197,7 +197,7 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
     story.append(info_table)
     story.append(Spacer(1, 0.5*cm))
 
-    # ── MAPPING REPORT CONTENT ──
+    # â”€â”€ MAPPING REPORT CONTENT â”€â”€
     if report_type == "mapping":
         detections = _fetch_detections(db, analysis_id)
         cat_summary = _category_summary(detections)
@@ -207,11 +207,11 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
 
         # Stats row
         stats_data = [
-            ["Total Detections", "Categories Found", "Area Covered", "Coverage %"],
+            ["Unique Objects", "Categories Found", "Area Covered", "Coverage %"],
             [
                 str(len(detections)),
                 str(len(cat_summary)),
-                f"{coverage['total_area_sqm']} m²",
+                f"{coverage['total_area_sqm']} mÂ²",
                 f"{coverage['coverage_percent']}%",
             ]
         ]
@@ -262,10 +262,10 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
             det_data = [["Label", "Category", "Confidence", "Timestamp"]]
             for det in detections[:20]:
                 det_data.append([
-                    det.get("label", "—")[:40],
-                    det.get("category_name", "—"),
+                    det.get("label", "â€”")[:40],
+                    det.get("category_name", "â€”"),
                     f"{det.get('confidence', 0):.0%}",
-                    f"{det.get('timestamp', 0):.1f}s" if det.get("timestamp") else "—",
+                    f"{det.get('timestamp', 0):.1f}s" if det.get("timestamp") else "â€”",
                 ])
             det_table = Table(det_data, colWidths=[7*cm, 4*cm, 3*cm, 3*cm])
             det_table.setStyle(TableStyle([
@@ -288,20 +288,20 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
         empty_pct = 100 - coverage["coverage_percent"]
         rec_text = (
             f"Analysis detected <b>{len(detections)}</b> objects across <b>{len(cat_summary)}</b> categories. "
-            f"Total covered area: <b>{coverage['total_area_sqm']} m²</b> "
+            f"Total covered area: <b>{coverage['total_area_sqm']} mÂ²</b> "
             f"({coverage['coverage_percent']}% of surveyed zone). "
-            f"Estimated available area: <b>{coverage['empty_area_sqm']} m²</b> ({empty_pct:.1f}%). "
+            f"Estimated available area: <b>{coverage['empty_area_sqm']} mÂ²</b> ({empty_pct:.1f}%). "
         )
         if "Plants" in cat_summary or "Trees" in cat_summary:
             plant_count = cat_summary.get("Plants", 0) + cat_summary.get("Trees", 0)
             rec_text += (
                 f"Vegetation analysis: {plant_count} plant/tree instances detected. "
-                f"Recommend planting in the {coverage['empty_area_sqm']} m² of open soil "
+                f"Recommend planting in the {coverage['empty_area_sqm']} mÂ² of open soil "
                 f"to improve green cover index."
             )
         story.append(Paragraph(rec_text, body_style))
 
-        # ── Screenshots Section ──
+        # â”€â”€ Screenshots Section â”€â”€
         screenshots = _fetch_screenshots(db, analysis_id, "mapping")
         if screenshots:
             story.append(Spacer(1, 0.4*cm))
@@ -343,7 +343,7 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
                     story.append(tbl)
                     story.append(Spacer(1, 0.3*cm))
 
-    # ── DISASTER REPORT CONTENT ──
+    # â”€â”€ DISASTER REPORT CONTENT â”€â”€
     else:
         events = _fetch_disaster_events(db, analysis_id)
 
@@ -358,12 +358,12 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
                 sev_color = colors.HexColor(f"#{sev_info['hex']}")
 
                 event_data = [
-                    ["Disaster Type", event.get("disaster_type", "—").upper()],
+                    ["Disaster Type", event.get("disaster_type", "â€”").upper()],
                     ["Severity", sev_info["label"]],
                     ["Confidence", f"{event.get('confidence', 0):.0%}"],
-                    ["Affected Area", f"{event.get('affected_area', 0):.0f} m²"],
+                    ["Affected Area", f"{event.get('affected_area', 0):.0f} mÂ²"],
                     ["Timestamp", f"{event.get('timestamp', 0):.1f}s into video"],
-                    ["Recommendations", event.get("recommendations", "—")],
+                    ["Recommendations", event.get("recommendations", "â€”")],
                 ]
                 if event.get("resource_estimation"):
                     res = event["resource_estimation"]
@@ -412,11 +412,11 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
 
                 story.append(KeepTogether(block + [Spacer(1, 0.4*cm)]))
 
-    # ── Footer ──
+    # â”€â”€ Footer â”€â”€
     story.append(Spacer(1, 0.5*cm))
     story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#1e293b")))
     story.append(Paragraph(
-        f"Generated by SkyRecon AI Drone Intelligence Platform • {datetime.now().strftime('%d %b %Y %H:%M')}",
+        f"Generated by SkyRecon AI Drone Intelligence Platform â€¢ {datetime.now().strftime('%d %b %Y %H:%M')}",
         ParagraphStyle("Footer", parent=styles["Normal"], fontSize=7,
                        textColor=colors.HexColor("#475569"), alignment=TA_CENTER)
     ))
@@ -426,9 +426,9 @@ def generate_pdf(analysis_id: int, report_type: str, db: Session) -> str:
     return f"/reports/{filename}"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  DOCX GENERATOR
-# ══════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def generate_docx(analysis_id: int, report_type: str, db: Session) -> str:
     """Generates a DOCX report and returns the file path."""
@@ -487,15 +487,15 @@ def generate_docx(analysis_id: int, report_type: str, db: Session) -> str:
                     for run in para.runs:
                         run.bold = True
 
-    # ── Title ──
+    # â”€â”€ Title â”€â”€
     add_heading("SKYRECON", level=1, color_hex="22c55e")
     add_para("AI Powered Drone Intelligence Platform", color_hex="94a3b8")
-    doc.add_paragraph("─" * 80)
+    doc.add_paragraph("â”€" * 80)
 
     report_title = "Mapping & Survey Report" if report_type == "mapping" else "Disaster Assessment Report"
     add_heading(report_title, level=2, color_hex="f0fdf4")
 
-    # ── Project Info ──
+    # â”€â”€ Project Info â”€â”€
     add_heading("Project Information", level=3, color_hex="22c55e")
     info_table = doc.add_table(rows=0, cols=2)
     info_table.style = "Table Grid"
@@ -504,13 +504,13 @@ def generate_docx(analysis_id: int, report_type: str, db: Session) -> str:
     proc_time = analysis.get("processing_time")
 
     info_rows = [
-        ("Project Name", analysis.get("project_name", "—")),
-        ("Location", analysis.get("location") or "—"),
-        ("Drone Model", analysis.get("drone_model") or "—"),
+        ("Project Name", analysis.get("project_name", "â€”")),
+        ("Location", analysis.get("location") or "â€”"),
+        ("Drone Model", analysis.get("drone_model") or "â€”"),
         ("Detection Mode", analysis.get("detection_mode", "standard").upper()),
-        ("Analysis Date", created_at.strftime("%d %b %Y, %H:%M") if created_at else "—"),
-        ("Processing Time", f"{proc_time:.1f} seconds" if proc_time else "—"),
-        ("Status", analysis.get("status", "—").upper()),
+        ("Analysis Date", created_at.strftime("%d %b %Y, %H:%M") if created_at else "â€”"),
+        ("Processing Time", f"{proc_time:.1f} seconds" if proc_time else "â€”"),
+        ("Status", analysis.get("status", "â€”").upper()),
     ]
     if analysis.get("description"):
         info_rows.append(("Description", analysis["description"]))
@@ -527,9 +527,9 @@ def generate_docx(analysis_id: int, report_type: str, db: Session) -> str:
 
         add_heading("Detection Summary", level=3, color_hex="22c55e")
         add_para(
-            f"Total Detections: {len(detections)}  |  "
+            f"Unique Objects Tracked: {len(detections)}  |  "
             f"Categories: {len(cat_summary)}  |  "
-            f"Area Covered: {coverage['total_area_sqm']} m²  |  "
+            f"Area Covered: {coverage['total_area_sqm']} mÂ²  |  "
             f"Coverage: {coverage['coverage_percent']}%",
             bold=True
         )
@@ -557,28 +557,28 @@ def generate_docx(analysis_id: int, report_type: str, db: Session) -> str:
             hdr[0].text, hdr[1].text, hdr[2].text, hdr[3].text = "Label", "Category", "Confidence", "Timestamp"
             for det in detections[:20]:
                 row = det_table.add_row()
-                row.cells[0].text = (det.get("label") or "—")[:40]
-                row.cells[1].text = det.get("category_name") or "—"
+                row.cells[0].text = (det.get("label") or "â€”")[:40]
+                row.cells[1].text = det.get("category_name") or "â€”"
                 row.cells[2].text = f"{det.get('confidence', 0):.0%}"
-                row.cells[3].text = f"{det.get('timestamp', 0):.1f}s" if det.get("timestamp") else "—"
+                row.cells[3].text = f"{det.get('timestamp', 0):.1f}s" if det.get("timestamp") else "â€”"
             doc.add_paragraph()
 
         add_heading("AI Planning Recommendations", level=3, color_hex="22c55e")
         empty_pct = 100 - coverage["coverage_percent"]
         rec = (
             f"Analysis detected {len(detections)} objects across {len(cat_summary)} categories. "
-            f"Total covered area: {coverage['total_area_sqm']} m² ({coverage['coverage_percent']}%). "
-            f"Available area: {coverage['empty_area_sqm']} m² ({empty_pct:.1f}%). "
+            f"Total covered area: {coverage['total_area_sqm']} mÂ² ({coverage['coverage_percent']}%). "
+            f"Available area: {coverage['empty_area_sqm']} mÂ² ({empty_pct:.1f}%). "
         )
         if "Plants" in cat_summary or "Trees" in cat_summary:
             plant_count = cat_summary.get("Plants", 0) + cat_summary.get("Trees", 0)
             rec += (
                 f"Vegetation: {plant_count} plant/tree instances detected. "
-                f"Recommend planting in {coverage['empty_area_sqm']} m² of open soil."
+                f"Recommend planting in {coverage['empty_area_sqm']} mÂ² of open soil."
             )
         add_para(rec)
 
-        # ── Screenshots ──
+        # â”€â”€ Screenshots â”€â”€
         screenshots = _fetch_screenshots(db, analysis_id, "mapping")
         if screenshots:
             doc.add_paragraph()
@@ -611,23 +611,23 @@ def generate_docx(analysis_id: int, report_type: str, db: Session) -> str:
                 hex_c = sev_info["hex"]
 
                 add_heading(
-                    f"{event.get('disaster_type','—').upper()} — {sev_info['label']}",
+                    f"{event.get('disaster_type','â€”').upper()} â€” {sev_info['label']}",
                     level=4, color_hex=hex_c
                 )
                 ev_table = doc.add_table(rows=0, cols=2)
                 ev_table.style = "Table Grid"
                 res = event.get("resource_estimation") or {}
                 rows_data = [
-                    ("Disaster Type", event.get("disaster_type", "—").upper()),
+                    ("Disaster Type", event.get("disaster_type", "â€”").upper()),
                     ("Severity", sev_info["label"]),
                     ("Confidence", f"{event.get('confidence', 0):.0%}"),
-                    ("Affected Area", f"{event.get('affected_area', 0):.0f} m²"),
+                    ("Affected Area", f"{event.get('affected_area', 0):.0f} mÂ²"),
                     ("Timestamp", f"{event.get('timestamp', 0):.1f}s into video"),
                     ("Rescue Teams", str(res.get("rescue_teams", 0))),
                     ("Ambulances", str(res.get("ambulances", 0))),
                     ("Rescue Boats", str(res.get("rescue_boats", 0))),
                     ("Support Staff", str(res.get("support_staff", 0))),
-                    ("Recommendations", event.get("recommendations", "—")),
+                    ("Recommendations", event.get("recommendations", "â€”")),
                 ]
                 for label, value in rows_data:
                     add_table_row(ev_table, [label, value])
@@ -651,9 +651,9 @@ def generate_docx(analysis_id: int, report_type: str, db: Session) -> str:
                 doc.add_paragraph()
 
     # Footer
-    doc.add_paragraph("─" * 80)
+    doc.add_paragraph("â”€" * 80)
     add_para(
-        f"Generated by SkyRecon AI Drone Intelligence Platform • {datetime.now().strftime('%d %b %Y %H:%M')}",
+        f"Generated by SkyRecon AI Drone Intelligence Platform â€¢ {datetime.now().strftime('%d %b %Y %H:%M')}",
         color_hex="475569"
     )
 
@@ -663,10 +663,11 @@ def generate_docx(analysis_id: int, report_type: str, db: Session) -> str:
 
 
 def generate_report(analysis_id: int, report_type: str, fmt: str, db: Session) -> str:
-    """Entry point — dispatches to PDF or DOCX generator."""
+    """Entry point â€” dispatches to PDF or DOCX generator."""
     if fmt == "pdf":
         return generate_pdf(analysis_id, report_type, db)
     elif fmt == "docx":
         return generate_docx(analysis_id, report_type, db)
     else:
         raise ValueError(f"Unsupported format: {fmt}")
+
