@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   Scan, FileText, AlertTriangle, Map, Eye, Upload,
   Activity, Layers, Cpu, BarChart3, RefreshCw, ArrowRight,
-  TrendingUp, Zap
+  TrendingUp, Zap, X, Rocket, WifiOff
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -59,6 +59,10 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState(new Date())
   const [apiOnline, setApiOnline] = useState(null) // null=checking, true, false
+  const [showWelcomeBanner, setShowWelcomeBanner] = useState(
+    () => !localStorage.getItem('skyrecon_banner_dismissed')
+  )
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false)
 
   const fetchAll = async () => {
     setLoading(true)
@@ -72,7 +76,9 @@ export default function DashboardPage() {
         fetch('/api/v1/categories/'),
       ])
 
-      setApiOnline(health.status === 'fulfilled' && health.value?.ok)
+      const online = health.status === 'fulfilled' && health.value?.ok
+      setApiOnline(online)
+      setShowOfflineBanner(!online)
 
       if (statsRes.status === 'fulfilled' && statsRes.value.ok)
         setStats(await statsRes.value.json())
@@ -133,6 +139,7 @@ export default function DashboardPage() {
     } catch (e) {
       console.warn('Dashboard fetch error:', e)
       setApiOnline(false)
+      setShowOfflineBanner(true)
     } finally {
       setLoading(false)
     }
@@ -145,8 +152,89 @@ export default function DashboardPage() {
     return () => clearInterval(interval)
   }, [])
 
+  const dismissWelcome = () => {
+    localStorage.setItem('skyrecon_banner_dismissed', '1')
+    setShowWelcomeBanner(false)
+  }
+
   return (
     <div className="space-y-6">
+
+      {/* ── Welcome / Onboarding Banner — shown on first visit until dismissed ── */}
+      <AnimatePresence>
+        {showWelcomeBanner && stats.total_analyses === 0 && !loading && (
+          <motion.div
+            initial={{ opacity: 0, y: -12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -12, scale: 0.98 }}
+            transition={{ duration: 0.35, ease: [0.175, 0.885, 0.32, 1.275] }}
+            className="relative overflow-hidden rounded-2xl border border-green-500/20 bg-gradient-to-r from-green-500/5 via-emerald-500/5 to-cyan-500/5 p-4"
+          >
+            {/* Animated scan line */}
+            <motion.div
+              className="absolute left-0 right-0 h-px bg-gradient-to-r from-transparent via-green-400/30 to-transparent"
+              animate={{ top: ['0%', '100%'] }}
+              transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
+            />
+            <div className="flex items-start gap-4">
+              <div className="p-2.5 rounded-xl bg-green-500/10 border border-green-500/20 flex-shrink-0">
+                <Rocket size={18} className="text-green-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-white mb-0.5">Welcome to SkyRecon Command Center</p>
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                  No analyses yet. Upload drone footage in{' '}
+                  <button onClick={() => navigate('/mapping')} className="text-green-400 hover:underline cursor-pointer font-semibold">Mapping Workspace</button>
+                  {' '}or{' '}
+                  <button onClick={() => navigate('/disaster')} className="text-orange-400 hover:underline cursor-pointer font-semibold">Disaster Assessment</button>
+                  {' '}to get started. Charts and stats will populate automatically.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={() => navigate('/mapping')}
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-xs font-semibold hover:bg-green-500/20 transition-colors cursor-pointer"
+                >
+                  <Upload size={12} /> Upload Video
+                </button>
+                <button
+                  onClick={dismissWelcome}
+                  className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+                  title="Dismiss"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Offline Warning Banner — shown when API is unreachable ── */}
+      <AnimatePresence>
+        {showOfflineBanner && apiOnline === false && (
+          <motion.div
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            transition={{ duration: 0.3 }}
+            className="flex items-center gap-3 px-4 py-3 rounded-xl border border-red-500/20 bg-red-500/5"
+          >
+            <WifiOff size={15} className="text-red-400 flex-shrink-0" />
+            <p className="text-xs text-red-300 flex-1">
+              <span className="font-semibold">Backend offline.</span>{' '}
+              Start the FastAPI server on port 8000 to enable live AI analysis. Showing cached database data.
+            </p>
+            <button
+              onClick={() => setShowOfflineBanner(false)}
+              className="p-1 rounded text-red-400/60 hover:text-red-400 transition-colors cursor-pointer flex-shrink-0"
+            >
+              <X size={13} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>

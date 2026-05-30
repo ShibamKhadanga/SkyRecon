@@ -98,7 +98,72 @@ export default function DisasterPage() {
     return () => URL.revokeObjectURL(url)
   }, [file])
 
+  // Cleanup poll on unmount — but DO NOT cancel the backend job
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  // On mount: reconnect to any in-progress disaster scan that was running when user navigated away
+  useEffect(() => {
+    const saved = localStorage.getItem('skyrecon_disaster_job')
+    if (!saved) return
+    const { id } = JSON.parse(saved)
+    fetch(`/api/v1/analysis/${id}/status`)
+      .then(r => r.json())
+      .then(sd => {
+        if (sd.status === 'processing') {
+          setAnalysisId(id)
+          setScanning(true)
+          setScanProgress(sd.progress || 5)
+          startPolling(id)
+        } else if (sd.status === 'completed') {
+          setAnalysisId(id)
+          setScanProgress(100)
+          fetch(`/api/v1/analysis/${id}/disasters`)
+            .then(r => r.json())
+            .then(events => {
+              setRealEvents(events)
+              setShowReport(true)
+            })
+          localStorage.removeItem('skyrecon_disaster_job')
+        } else {
+          localStorage.removeItem('skyrecon_disaster_job')
+        }
+      })
+      .catch(() => localStorage.removeItem('skyrecon_disaster_job'))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const startPolling = (id) => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    pollRef.current = setInterval(async () => {
+      try {
+        const sr = await fetch(`/api/v1/analysis/${id}/status`)
+        const sd = await sr.json()
+        if (typeof sd.progress === 'number' && sd.progress > 0) {
+          setScanProgress(sd.progress)
+        } else if (sd.status === 'processing') {
+          setScanProgress(prev => Math.min(prev + 2, 90))
+        }
+        if (sd.status === 'completed') {
+          clearInterval(pollRef.current)
+          localStorage.removeItem('skyrecon_disaster_job')
+          setScanProgress(100)
+          const er = await fetch(`/api/v1/analysis/${id}/disasters`)
+          const events = await er.json()
+          setRealEvents(events)
+          setScanning(false)
+          setShowReport(true)
+          setTimeout(() => triggerVoiceSpeech(events), 300)
+        } else if (sd.status === 'failed') {
+          clearInterval(pollRef.current)
+          localStorage.removeItem('skyrecon_disaster_job')
+          setApiError('Disaster analysis failed on server.')
+          setScanning(false)
+        }
+      } catch (e) {
+        console.warn('Poll error:', e)
+      }
+    }, 3000)
+  }
 
   const handleStartScan = async () => {
     if (!file) return
@@ -119,37 +184,9 @@ export default function DisasterPage() {
       const data = await res.json()
       setAnalysisId(data.id)
       setScanProgress(15)
-
-      // Poll for completion
-      if (pollRef.current) clearInterval(pollRef.current)
-      pollRef.current = setInterval(async () => {
-        try {
-          const sr = await fetch(`/api/v1/analysis/${data.id}/status`)
-          const sd = await sr.json()
-          // Use real progress from backend
-          if (typeof sd.progress === 'number' && sd.progress > 0) {
-            setScanProgress(sd.progress)
-          } else if (sd.status === 'processing') {
-            setScanProgress(prev => Math.min(prev + 2, 90))
-          }
-          if (sd.status === 'completed') {
-            clearInterval(pollRef.current)
-            setScanProgress(100)
-            const er = await fetch(`/api/v1/analysis/${data.id}/disasters`)
-            const events = await er.json()
-            setRealEvents(events)
-            setScanning(false)
-            setShowReport(true)
-            setTimeout(() => triggerVoiceSpeech(events), 300)
-          } else if (sd.status === 'failed') {
-            clearInterval(pollRef.current)
-            setApiError('Disaster analysis failed on server.')
-            setScanning(false)
-          }
-        } catch (e) {
-          console.warn('Poll error:', e)
-        }
-      }, 3000)
+      // Persist so navigating away doesn't lose the job
+      localStorage.setItem('skyrecon_disaster_job', JSON.stringify({ id: data.id }))
+      startPolling(data.id)
     } catch (e) {
       setApiError(e.message)
       setScanning(false)
@@ -277,6 +314,15 @@ export default function DisasterPage() {
                 Initialize the high-priority AI disaster scan once the drone footage completes processing. 
                 Our neural models will frame all hazards, rank structural distress, tag GPS coordinates, and speak audio announcements directly to local emergency response teams.
               </p>
+
+              {scanning && !file && (
+                <div className="p-3 rounded-lg bg-green-500/5 border border-green-500/20 text-[10px] text-green-400 font-mono flex items-start gap-2">
+                  <Cpu size={14} className="flex-shrink-0 animate-spin mt-0.5" />
+                  <div>
+                    <span className="font-bold">RECONNECTED —</span> Analysis still running on server ({scanProgress}%). Results will appear automatically when complete.
+                  </div>
+                </div>
+              )}
 
               {offlineMode && (
                 <div className="p-3 rounded-lg bg-orange-500/5 border border-orange-500/10 text-[10px] text-orange-400 font-mono flex items-start gap-2">

@@ -406,6 +406,48 @@ export default function MappingPage() {
     return () => URL.revokeObjectURL(url)
   }, [file])
 
+  // Revoke old object URL and create new one when file changes
+  useEffect(() => {
+    if (!file) { setVideoUrl(null); return }
+    const url = URL.createObjectURL(file)
+    setVideoUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
+
+  // On mount: reconnect to any in-progress job that was running when user navigated away
+  useEffect(() => {
+    const saved = localStorage.getItem('skyrecon_mapping_job')
+    if (!saved) return
+    const { id, startTime } = JSON.parse(saved)
+    fetch(`/api/v1/analysis/${id}/status`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === 'processing') {
+          setAnalysisId(id)
+          setAnalyzing(true)
+          setAnalysisStartTime(startTime)
+          setAnalysisProgress(data.progress || 5)
+          setTerminalLogs([`[SYSTEM] Reconnected to job #${id} — still running (${data.progress ?? 0}%)...`])
+          startPolling(id, startTime)
+        } else if (data.status === 'completed') {
+          setAnalysisId(id)
+          setAnalysisProgress(100)
+          fetch(`/api/v1/analysis/${id}/summary`)
+            .then(r => r.json())
+            .then(summary => {
+              setRealResults(summary)
+              setShowReport(true)
+              setTerminalLogs([`[SYSTEM] Job #${id} finished while you were away. Results loaded.`])
+            })
+          localStorage.removeItem('skyrecon_mapping_job')
+        } else {
+          localStorage.removeItem('skyrecon_mapping_job')
+        }
+      })
+      .catch(() => localStorage.removeItem('skyrecon_mapping_job'))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Autofill metadata
   const [metadata, setMetadata] = useState({
     projectName: 'NIT Rourkela Campus Survey',
@@ -415,7 +457,7 @@ export default function MappingPage() {
   })
 
   // Poll backend for real analysis status
-  const startPolling = (aid) => {
+  const startPolling = (aid, startTime) => {
     if (pollRef.current) clearInterval(pollRef.current)
     pollRef.current = setInterval(async () => {
       try {
@@ -423,9 +465,8 @@ export default function MappingPage() {
         const data = await res.json()
         if (typeof data.progress === 'number' && data.progress > 0) {
           setAnalysisProgress(data.progress)
-          // Compute ETA from elapsed time and progress
-          if (analysisStartTime && data.progress > 5) {
-            const elapsed = (Date.now() - analysisStartTime) / 1000
+          if (startTime && data.progress > 5) {
+            const elapsed = (Date.now() - startTime) / 1000
             const totalEst = elapsed / (data.progress / 100)
             setEtaSeconds(Math.max(0, Math.round(totalEst - elapsed)))
           }
@@ -440,6 +481,7 @@ export default function MappingPage() {
           })
         } else if (data.status === 'completed') {
           clearInterval(pollRef.current)
+          localStorage.removeItem('skyrecon_mapping_job')
           setAnalysisProgress(100)
           setTerminalLogs(prev => [...prev,
             `[SYSTEM] Analysis complete. ${data.total_objects} detections in ${data.processing_time?.toFixed(1)}s.`
@@ -451,6 +493,7 @@ export default function MappingPage() {
           setShowReport(true)
         } else if (data.status === 'failed') {
           clearInterval(pollRef.current)
+          localStorage.removeItem('skyrecon_mapping_job')
           setApiError('Analysis failed on the server. Check backend logs.')
           setAnalyzing(false)
           setTerminalLogs(prev => [...prev, '[ERROR] Analysis pipeline failed.'])
@@ -465,13 +508,14 @@ export default function MappingPage() {
 
   const handleStartAnalysis = async () => {
     if (!file) return
+    const startTime = Date.now()
     setAnalyzing(true)
     setShowReport(false)
     setRealResults(null)
     setApiError(null)
     setAnalysisProgress(5)
     setEtaSeconds(null)
-    setAnalysisStartTime(Date.now())
+    setAnalysisStartTime(startTime)
     setTerminalLogs([
       '[SYSTEM] Uploading drone footage to SkyRecon AI Engine...',
       `[SYSTEM] Category: ${categoriesConfig[selectedCategory]?.label} | Mode: ${detectionMode.toUpperCase()}`,
@@ -494,13 +538,15 @@ export default function MappingPage() {
       const data = await res.json()
       setAnalysisId(data.id)
       setAnalysisProgress(15)
+      // Persist job to localStorage so navigating away doesn't lose it
+      localStorage.setItem('skyrecon_mapping_job', JSON.stringify({ id: data.id, startTime }))
       setTerminalLogs(prev => [
         ...prev,
         `[SYSTEM] Job created (ID: ${data.id}). YOLOv8 pipeline starting...`,
         '[YOLOv8] Loading model weights, fusing Conv+BN layers...',
         '[AI] Extracting frames at 2fps for inference...',
       ])
-      startPolling(data.id)
+      startPolling(data.id, startTime)
     } catch (e) {
       setApiError(e.message)
       setAnalyzing(false)

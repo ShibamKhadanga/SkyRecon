@@ -134,7 +134,22 @@ async def upload_video(
     with open(file_path, "wb") as buf:
         shutil.copyfileobj(file.file, buf)
 
-    # Create analysis record
+    # Create analysis record — store selected_category and characteristics in custom_query field
+    # Format: "CATEGORY:Vehicles|CHARS:{...}|QUERY:..."
+    import json
+    try:
+        chars = json.loads(characteristics)
+    except Exception:
+        chars = {}
+
+    # Build a rich custom_query string that stores all analysis context
+    analysis_context = json.dumps({
+        "selected_category": selected_category,
+        "characteristics": chars,
+        "custom_query": custom_query,
+        "analysis_type": analysis_type,
+    })
+
     try:
         res = db.execute(
             text("""
@@ -149,7 +164,7 @@ async def upload_video(
                 "location": location,
                 "drone_model": drone_model,
                 "detection_mode": detection_mode,
-                "custom_query": custom_query,
+                "custom_query": analysis_context,
             }
         )
         analysis_id = res.scalar()
@@ -161,13 +176,6 @@ async def upload_video(
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"DB error creating analysis: {e}")
-
-    # Parse characteristics JSON safely
-    import json
-    try:
-        chars = json.loads(characteristics)
-    except Exception:
-        chars = {}
 
     # Kick off the real AI pipeline in the background
     if analysis_type == "disaster":
@@ -188,17 +196,21 @@ async def upload_video(
 def get_status(analysis_id: int, db: Session = Depends(get_db)):
     """Poll this endpoint to track real processing progress."""
     row = db.execute(
-        text("SELECT status, total_objects, processing_time, progress_pct FROM analyses WHERE id=:id"),
+        text("SELECT status, total_objects, processing_time, description FROM analyses WHERE id=:id"),
         {"id": analysis_id}
     ).first()
     if not row:
         raise HTTPException(404, "Analysis not found")
 
-    progress = row.progress_pct or 0
+    # Progress is written into description as '||PROGRESS||NN'
+    progress = 0
+    if row.description and "||PROGRESS||" in row.description:
+        try:
+            progress = int(row.description.split("||PROGRESS||")[-1])
+        except Exception:
+            progress = 0
     if row.status == "completed":
         progress = 100
-    elif row.status == "failed":
-        progress = 0
     elif row.status == "processing":
         progress = max(5, progress)
 

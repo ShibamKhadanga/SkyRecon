@@ -73,6 +73,43 @@ YOLO_TO_CATEGORY: dict[str, str] = {
     "clock": "Buildings", "teddy bear": "People",
 }
 
+# ── Aerial misclassification correction ───────────────────────────────────────
+# From drone altitude, people are often misclassified as these COCO classes.
+# We remap them back to People when the bbox shape matches a person.
+# An actual kite is wide (aspect ratio > 1.5), a person is tall or square.
+AERIAL_PERSON_MISCLASSES = {"kite", "frisbee", "sports ball", "surfboard", "skateboard"}
+
+def _correct_aerial_misclassification(
+    cls_name: str,
+    x1: float, y1: float, x2: float, y2: float,
+    target_cat: str,
+) -> str:
+    """
+    Corrects common aerial-view misclassifications.
+    A person seen from above/behind is often detected as kite, frisbee, etc.
+    We check the bounding box shape:
+      - Person shape: roughly square or taller than wide (aspect ratio <= 1.8)
+      - Actual kite:  wide horizontal shape (aspect ratio > 1.8)
+    Only applies when target category is People.
+    """
+    if cls_name not in AERIAL_PERSON_MISCLASSES:
+        return cls_name
+    if target_cat.lower() != "people":
+        return cls_name  # only remap when looking for people
+
+    w = x2 - x1
+    h = y2 - y1
+    if w <= 0:
+        return cls_name
+
+    aspect = w / h  # width/height ratio
+    # Person from above: aspect ratio typically 0.3 – 1.8
+    # Real kite/frisbee: aspect ratio typically > 1.8 or very small area
+    if aspect <= 1.8:
+        logger.debug(f"[AI] Remapped '{cls_name}' → 'person' (aspect={aspect:.2f})")
+        return "person"
+    return cls_name
+
 # ── Per-category inference config ─────────────────────────────────────────────
 # People from aerial view need lower confidence + higher fps to catch walkers
 CATEGORY_SETTINGS: dict[str, dict] = {
@@ -121,7 +158,10 @@ def _write_progress(db: Session, analysis_id: int, pct: int, count: int):
         text("""
             UPDATE analyses
             SET total_objects = :count,
-                progress_pct  = :pct
+                description = CONCAT(
+                    COALESCE(SPLIT_PART(COALESCE(description,''), '||PROGRESS||', 1), ''),
+                    '||PROGRESS||', CAST(:pct AS TEXT)
+                )
             WHERE id = :id
         """),
         {"id": analysis_id, "count": count, "pct": pct}
@@ -200,14 +240,13 @@ def run_mapping_analysis(
             logger.info(f"[AI] {total_frames} frames @ {fps:.1f}fps, interval={frame_interval}, seek={_supports_seek}")
 
         # ── Tracking state ──
-        # seen_track_ids: maps (track_id, cls_id) → first_seen_timestamp
-        # This is the ground truth for unique object count
         seen_track_ids: dict[tuple, float] = {}
+        # screenshot_paths: maps obj_key → screenshot path (one per unique object)
+        obj_screenshots: dict[tuple, str] = {}
 
         batch: list[dict] = []
         BATCH_SIZE = 50
         raw_detection_count = 0
-        screenshot_count = 0
         last_progress = 0
 
         def flush_batch():
@@ -224,17 +263,31 @@ def run_mapping_analysis(
                     """),
                     det
                 )
+                # Save screenshot path separately if present
+                if det.get("screenshot_path"):
+                    db.execute(
+                        text("""
+                            UPDATE detections SET screenshot_path = :path
+                            WHERE analysis_id = :aid AND frame_number = :fn
+                            AND label = :label
+                        """),
+                        {
+                            "path": det["screenshot_path"],
+                            "aid": det["analysis_id"],
+                            "fn": det["frame_number"],
+                            "label": det["label"],
+                        }
+                    )
                 raw_detection_count += 1
             db.commit()
             batch.clear()
 
         def process_frame(frame: np.ndarray, frame_idx: int, timestamp_sec: float):
-            nonlocal screenshot_count
+            nonlocal raw_detection_count
 
             h, w = frame.shape[:2]
             enhanced = _enhance_frame(frame)
 
-            # Resize to 640px for speed
             if w > 640:
                 scale = 640 / w
                 frame_small = cv2.resize(enhanced, (640, int(h * scale)))
@@ -242,23 +295,18 @@ def run_mapping_analysis(
                 frame_small = enhanced
             h_s, w_s = frame_small.shape[:2]
 
-            # ── ByteTrack tracking ──
-            # model.track() runs detection + ByteTrack in one call.
-            # Each box gets a .id (persistent track ID across frames).
-            # persist=True keeps the tracker state between calls.
             try:
                 results = model.track(
                     frame_small,
-                    persist=True,           # keep tracker state across frames
+                    persist=True,
                     verbose=False,
                     conf=conf_threshold,
                     iou=iou_threshold,
                     agnostic_nms=True,
                     max_det=300,
-                    tracker="bytetrack.yaml",  # ByteTrack config (built into ultralytics)
+                    tracker="bytetrack.yaml",
                 )
             except Exception:
-                # Fallback to plain detection if tracker fails
                 results = model(
                     frame_small,
                     verbose=False,
@@ -268,10 +316,6 @@ def run_mapping_analysis(
                     max_det=300,
                 )
 
-            want_screenshot = screenshot_count < MAX_SCREENSHOTS
-            annotated = frame.copy() if want_screenshot else None
-            screenshot_saved = False
-
             for result in results:
                 if result.boxes is None or len(result.boxes) == 0:
                     continue
@@ -280,9 +324,23 @@ def run_mapping_analysis(
                     cls_id     = int(box.cls[0])
                     cls_name   = model.names[cls_id]
                     confidence = float(box.conf[0])
+                    track_id   = int(box.id[0]) if box.id is not None else None
 
-                    # Get ByteTrack ID — None if tracker didn't assign one
-                    track_id = int(box.id[0]) if box.id is not None else None
+                    # Scale bbox to original resolution
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    x1o = x1 * (w / w_s); y1o = y1 * (h / h_s)
+                    x2o = x2 * (w / w_s); y2o = y2 * (h / h_s)
+
+                    # ── Fix 1: Correct aerial misclassifications ──
+                    # e.g. person from above/behind detected as kite, frisbee, etc.
+                    cls_name = _correct_aerial_misclassification(
+                        cls_name, x1o, y1o, x2o, y2o, target_cat
+                    )
+                    # Re-get cls_id after potential remap
+                    if cls_name == "person":
+                        cls_id = next(
+                            (k for k, v in model.names.items() if v == "person"), cls_id
+                        )
 
                     mapped_cat = YOLO_TO_CATEGORY.get(cls_name)
                     if not mapped_cat:
@@ -294,23 +352,55 @@ def run_mapping_analysis(
                     if cat_id is None:
                         continue
 
-                    # Scale bbox back to original resolution
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    x1o = x1 * (w / w_s); y1o = y1 * (h / h_s)
-                    x2o = x2 * (w / w_s); y2o = y2 * (h / h_s)
-
-                    # ── Unique object tracking ──
+                    # ── Unique object key ──
                     if track_id is not None:
                         obj_key = (track_id, cls_id)
                     else:
-                        obj_key = (round(x1o/20), round(y1o/20), round(x2o/20), round(y2o/20), cls_id)
+                        obj_key = (round(x1o/20), round(y1o/20),
+                                   round(x2o/20), round(y2o/20), cls_id)
 
                     is_first_appearance = obj_key not in seen_track_ids
 
                     if is_first_appearance:
                         seen_track_ids[obj_key] = timestamp_sec
+
+                        # ── Fix 2: Save one screenshot per NEW unique object ──
+                        # Crop tightly around the detected object with padding,
+                        # draw bbox + label + timestamp, save as individual screenshot.
+                        try:
+                            pad = 30
+                            cx1 = max(0, int(x1o) - pad)
+                            cy1 = max(0, int(y1o) - pad)
+                            cx2 = min(w, int(x2o) + pad)
+                            cy2 = min(h, int(y2o) + pad)
+                            crop = frame[cy1:cy2, cx1:cx2].copy()
+
+                            # Draw bbox on crop (offset by crop origin)
+                            bx1 = int(x1o) - cx1
+                            by1 = int(y1o) - cy1
+                            bx2 = int(x2o) - cx1
+                            by2 = int(y2o) - cy1
+                            cv2.rectangle(crop, (bx1, by1), (bx2, by2), (57, 255, 20), 2)
+                            tid_str = f" #{track_id}" if track_id else ""
+                            cv2.putText(crop,
+                                        f"{cls_name}{tid_str} {confidence:.0%}",
+                                        (bx1, max(by1 - 6, 10)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (57, 255, 20), 2)
+                            # Timestamp at bottom
+                            cv2.putText(crop,
+                                        f"T={timestamp_sec:.1f}s",
+                                        (6, crop.shape[0] - 8),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 2)
+
+                            shot_path = _save_screenshot(
+                                crop, f"map_{analysis_id}", timestamp_sec
+                            )
+                            obj_screenshots[obj_key] = shot_path
+                        except Exception as se:
+                            logger.debug(f"[AI] Screenshot failed: {se}")
+
                         label = (
-                            f"{cls_name} #{track_id if track_id else 'new'} "
+                            f"{cls_name}{(' #'+str(track_id)) if track_id else ''} "
                             f"({confidence:.0%}) first seen T={timestamp_sec:.1f}s"
                         )
                         batch.append({
@@ -324,23 +414,8 @@ def run_mapping_analysis(
                             "frame_number": frame_idx,
                             "timestamp": timestamp_sec,
                             "characteristics": chars_str,
+                            "screenshot_path": obj_screenshots.get(obj_key),
                         })
-
-                    # Draw on screenshot only if we still need one this frame
-                    if want_screenshot and annotated is not None:
-                        bx1, by1, bx2, by2 = map(int, [x1o, y1o, x2o, y2o])
-                        color = (57, 255, 20) if is_first_appearance else (0, 200, 255)
-                        cv2.rectangle(annotated, (bx1, by1), (bx2, by2), color, 2)
-                        tid_str = f"#{track_id}" if track_id else ""
-                        cv2.putText(annotated,
-                                    f"{cls_name}{tid_str} {confidence:.0%}",
-                                    (bx1, max(by1 - 6, 10)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
-                        screenshot_saved = True
-
-            if want_screenshot and screenshot_saved and annotated is not None:
-                _save_screenshot(annotated, f"map_{analysis_id}", timestamp_sec)
-                screenshot_count += 1
 
             if len(batch) >= BATCH_SIZE:
                 flush_batch()

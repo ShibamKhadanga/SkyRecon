@@ -74,11 +74,11 @@ def _fetch_screenshots(db: Session, analysis_id: int, report_type: str) -> list[
     else:
         rows = db.execute(
             text("""
-                SELECT DISTINCT screenshot_path, timestamp, label, confidence
+                SELECT screenshot_path, timestamp, label, confidence
                 FROM detections
-                WHERE analysis_id = :id AND screenshot_path IS NOT NULL
-                ORDER BY confidence DESC
-                LIMIT 8
+                WHERE analysis_id = :id
+                  AND screenshot_path IS NOT NULL
+                ORDER BY timestamp ASC
             """),
             {"id": analysis_id}
         ).fetchall()

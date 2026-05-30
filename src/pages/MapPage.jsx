@@ -51,22 +51,10 @@ const userLocationIcon = () => new L.DivIcon({
   iconAnchor: [9, 9],
 })
 
-// India-wide mock markers across real cities
-const mockMarkers = [
-  { id: 1, position: [22.2531, 84.9011], label: 'NIT Rourkela Campus', city: 'Rourkela, Odisha', type: 'infrastructure', severity: 1, color: '#22c55e', detections: 67, desc: 'Campus surveillance — 67 infrastructure elements mapped.' },
-  { id: 2, position: [20.2961, 85.8245], label: 'Flood Zone — Mahanadi', city: 'Cuttack, Odisha', type: 'disaster', severity: 5, color: '#ef4444', detections: 18, desc: 'Severe flooding. 4.5ft water depth. Evacuation required.' },
-  { id: 3, position: [28.6139, 77.2090], label: 'Delhi Traffic Corridor', city: 'New Delhi', type: 'traffic', severity: 3, color: '#f97316', detections: 450, desc: 'Heavy traffic on NH-48. 450 vehicles detected, density: high.' },
-  { id: 4, position: [19.0760, 72.8777], label: 'Mumbai Coastal Scan', city: 'Mumbai, Maharashtra', type: 'vegetation', severity: 1, color: '#84cc16', detections: 120, desc: 'Coastal vegetation & mangrove cover analysis completed.' },
-  { id: 5, position: [12.9716, 77.5946], label: 'Bangalore Tech Park', city: 'Bengaluru, Karnataka', type: 'building', severity: 1, color: '#a855f7', detections: 89, desc: 'Tech corridor infrastructure scan. 89 structures mapped.' },
-  { id: 6, position: [17.3850, 78.4867], label: 'Hyderabad Fire Alert', city: 'Hyderabad, Telangana', type: 'disaster', severity: 4, color: '#f97316', detections: 6, desc: 'Active fire & smoke in industrial block. Level 4 alert.' },
-  { id: 7, position: [22.5726, 88.3639], label: 'Kolkata Road Survey', city: 'Kolkata, West Bengal', type: 'infrastructure', severity: 2, color: '#eab308', detections: 230, desc: 'Pothole & road damage survey. 230 defects mapped.' },
-  { id: 8, position: [26.9124, 75.7873], label: 'Jaipur Land Mapping', city: 'Jaipur, Rajasthan', type: 'vegetation', severity: 1, color: '#06b6d4', detections: 155, desc: 'Agricultural land use and vegetation health analysis.' },
-  { id: 9, position: [21.1458, 79.0882], label: 'Nagpur Plantation Zone', city: 'Nagpur, Maharashtra', type: 'vegetation', severity: 1, color: '#4ade80', detections: 320, desc: 'Orange orchard & plantation health monitoring complete.' },
-  { id: 10, position: [13.0827, 80.2707], label: 'Chennai Flood Monitor', city: 'Chennai, Tamil Nadu', type: 'disaster', severity: 3, color: '#60a5fa', detections: 14, desc: 'Moderate waterlogging in residential zones. Monitoring active.' },
-]
+// No hardcoded mock markers — only real DB data is shown
 
 const tileLayers = {
-  dark: { url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', name: 'Dark', icon: '🌑' },
+  terrain: { url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', name: 'Terrain', icon: '🏔️' },
   satellite: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', name: 'Satellite', icon: '🛰️' },
   street: { url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', name: 'Streets', icon: '🗺️' },
 }
@@ -128,19 +116,27 @@ function LocateMeControl({ onLocate }) {
 }
 
 export default function MapPage() {
-  const [activeLayer, setActiveLayer] = useState('dark')
+  const [activeLayer, setActiveLayer] = useState('terrain')
   const [showHeatmap, setShowHeatmap] = useState(false)
   const [selectedMarker, setSelectedMarker] = useState(null)
-  const [center, setCenter] = useState([22.5, 82.5]) // India geographic center
+  const [center, setCenter] = useState([22.5, 82.5])
   const [zoom, setZoom] = useState(5)
   const [userLocation, setUserLocation] = useState(null)
   const [locating, setLocating] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [filterType, setFilterType] = useState('all')
-  const [markers, setMarkers] = useState(mockMarkers)
+  const [markers, setMarkers] = useState([])
   const [usingRealData, setUsingRealData] = useState(false)
+  const [weather, setWeather] = useState(null)
+  const [weatherGrid, setWeatherGrid] = useState([]) // grid of points for map overlays
+  const [activeOverlay, setActiveOverlay] = useState(null) // 'temp' | 'pressure' | 'wind' | null
+  const [aircraft, setAircraft] = useState([])
+  const [satellites, setSatellites] = useState([])
+  const [showAircraft, setShowAircraft] = useState(false)
+  const [showSatellites, setShowSatellites] = useState(false)
+  const [trafficLoading, setTrafficLoading] = useState(false)
 
-  // Auto-detect user location on mount
+  // Auto-detect user location on mount + fetch weather
   useEffect(() => {
     if (navigator.geolocation) {
       setLocating(true)
@@ -151,9 +147,58 @@ export default function MapPage() {
           setCenter(latlng)
           setZoom(12)
           setLocating(false)
+          // Fetch real-time weather from Open-Meteo (free, no API key)
+          fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latlng[0]}&longitude=${latlng[1]}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code,apparent_temperature&wind_speed_unit=kmh&timezone=auto`)
+            .then(r => r.json())
+            .then(d => {
+              const c = d.current
+              const wmoDesc = (code) => {
+                if (code === 0) return { label: 'Clear Sky', icon: '☀️' }
+                if (code <= 3) return { label: 'Partly Cloudy', icon: '⛅' }
+                if (code <= 49) return { label: 'Foggy', icon: '🌫️' }
+                if (code <= 67) return { label: 'Rainy', icon: '🌧️' }
+                if (code <= 77) return { label: 'Snowy', icon: '❄️' }
+                if (code <= 82) return { label: 'Rain Showers', icon: '🌦️' }
+                if (code <= 99) return { label: 'Thunderstorm', icon: '⛈️' }
+                return { label: 'Unknown', icon: '🌡️' }
+              }
+              const { label, icon } = wmoDesc(c.weather_code)
+              setWeather({
+                temp: Math.round(c.temperature_2m),
+                feels: Math.round(c.apparent_temperature),
+                humidity: c.relative_humidity_2m,
+                wind: Math.round(c.wind_speed_10m),
+                label,
+                icon,
+              })
+              // Fetch a 4x4 grid of points around user for map overlay
+              const offsets = [-1.5, -0.5, 0.5, 1.5]
+              const gridPoints = []
+              for (const dlat of offsets) {
+                for (const dlon of offsets) {
+                  gridPoints.push({ lat: latlng[0] + dlat, lon: latlng[1] + dlon })
+                }
+              }
+              const latList = gridPoints.map(p => p.lat).join(',')
+              const lonList = gridPoints.map(p => p.lon).join(',')
+              fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latList}&longitude=${lonList}&current=temperature_2m,surface_pressure,wind_speed_10m&wind_speed_unit=kmh&timezone=auto`)
+                .then(r => r.json())
+                .then(arr => {
+                  const results = Array.isArray(arr) ? arr : [arr]
+                  const grid = results.map((item, i) => ({
+                    lat: gridPoints[i]?.lat,
+                    lon: gridPoints[i]?.lon,
+                    temp: Math.round(item.current?.temperature_2m ?? 0),
+                    pressure: Math.round(item.current?.surface_pressure ?? 1013),
+                    wind: Math.round(item.current?.wind_speed_10m ?? 0),
+                  }))
+                  setWeatherGrid(grid)
+                })
+                .catch(() => {})
+            })
+            .catch(() => {})
         },
         () => {
-          // On denial, default to India center
           setCenter([20.5937, 78.9629])
           setZoom(5)
           setLocating(false)
@@ -163,31 +208,32 @@ export default function MapPage() {
     }
   }, [])
 
-  // Fetch active database markers
+  // Fetch live markers from DB
   useEffect(() => {
     fetch('/api/v1/dashboard/map-markers')
-      .then((res) => {
-        if (!res.ok) throw new Error('API error')
-        return res.json()
-      })
+      .then((res) => { if (!res.ok) throw new Error(); return res.json() })
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
-          const parsed = data.map((m) => ({
-            id: m.id,
-            position: [m.lat, m.lon],
-            label: m.label,
-            city: m.lat > 28 ? 'North India Region' : 'Central/South India',
-            type: m.type,
-            severity: m.severity,
-            color: m.color || '#22c55e',
-            detections: m.detections || 1,
-            desc: `Detection marker from database (lat: ${m.lat.toFixed(4)}, lon: ${m.lon.toFixed(4)}).`
-          }))
-          setMarkers(parsed)
-          setUsingRealData(true)
+          const parsed = data
+            .filter(m => m.lat && m.lon && !String(m.id).startsWith('mock') && !String(m.label).includes('Mock'))
+            .map((m) => ({
+              id: m.id,
+              position: [m.lat, m.lon],
+              label: m.label,
+              city: `${m.lat.toFixed(3)}°N, ${m.lon.toFixed(3)}°E`,
+              type: m.type || 'infrastructure',
+              severity: m.severity || 1,
+              color: m.color || '#22c55e',
+              detections: m.detections || 1,
+              desc: m.label,
+            }))
+          if (parsed.length > 0) {
+            setMarkers(parsed)
+            setUsingRealData(true)
+          }
         }
       })
-      .catch((err) => console.log('Using demo GIS markers:', err))
+      .catch(() => {})
   }, [])
 
   const handleLocateMe = () => {
@@ -204,6 +250,37 @@ export default function MapPage() {
       () => setLocating(false),
       { timeout: 8000 }
     )
+  }
+
+  const fetchAircraft = async () => {
+    const loc = userLocation || [20.5937, 78.9629]
+    setTrafficLoading(true)
+    try {
+      const res = await fetch(`/api/v1/dashboard/live-aircraft?lat=${loc[0]}&lon=${loc[1]}&radius=8`)
+      const data = await res.json()
+      setAircraft(data.aircraft || [])
+    } catch { setAircraft([]) }
+    setTrafficLoading(false)
+  }
+
+  const fetchSatellites = async () => {
+    setTrafficLoading(true)
+    try {
+      const res = await fetch('/api/v1/dashboard/live-satellites')
+      const data = await res.json()
+      setSatellites(data.satellites || [])
+    } catch { setSatellites([]) }
+    setTrafficLoading(false)
+  }
+
+  const handleToggleAircraft = () => {
+    if (!showAircraft && aircraft.length === 0) fetchAircraft()
+    setShowAircraft(v => !v)
+  }
+
+  const handleToggleSatellites = () => {
+    if (!showSatellites && satellites.length === 0) fetchSatellites()
+    setShowSatellites(v => !v)
   }
 
   const filteredMarkers = markers.filter((m) => {
@@ -228,8 +305,8 @@ export default function MapPage() {
                 📍 {userLocation[0].toFixed(4)}°N, {userLocation[1].toFixed(4)}°E
               </span>
             )}
-            {!usingRealData && (
-              <span className="ml-2 text-yellow-400/70 font-mono text-xs">· Demo markers (run an analysis to see real data)</span>
+            {usingRealData && (
+              <span className="ml-2 text-green-400/70 font-mono text-xs">· {markers.length} live detection sites</span>
             )}
           </p>
         </div>
@@ -326,6 +403,82 @@ export default function MapPage() {
                 }}
               />
             ))}
+
+            {/* Aircraft markers */}
+            {showAircraft && aircraft.map((ac) => (
+              <Marker
+                key={ac.icao}
+                position={[ac.lat, ac.lon]}
+                icon={new L.DivIcon({
+                  html: `<div style="font-size:18px;transform:rotate(${ac.heading}deg);filter:drop-shadow(0 0 4px #06b6d4)" title="${ac.callsign}">✈️</div>`,
+                  className: '', iconSize: [20, 20], iconAnchor: [10, 10],
+                })}
+              >
+                <Popup>
+                  <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
+                    <b>✈️ {ac.callsign}</b><br />
+                    Country: {ac.country}<br />
+                    Alt: {ac.altitude}m &nbsp; Speed: {ac.speed} m/s<br />
+                    Heading: {ac.heading}°<br />
+                    {ac.on_ground ? '🟡 On Ground' : '🟢 Airborne'}
+                  </div>
+                </Popup>
+              </Marker>
+            ))}
+
+            {/* Satellite markers */}
+            {showSatellites && satellites.map((sat, i) => (
+              <Marker
+                key={i}
+                position={[sat.lat, sat.lon]}
+                icon={new L.DivIcon({
+                  html: `<div style="font-size:16px;filter:drop-shadow(0 0 5px #a855f7)" title="${sat.name}">🛰️</div>`,
+                  className: '', iconSize: [18, 18], iconAnchor: [9, 9],
+                })}
+              >
+                <Popup>
+                  <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
+                    <b>🛰️ {sat.name}</b><br />
+                    Alt: ~{sat.altitude_km} km<br />
+                    Inclination: {sat.inclination}°<br />
+                    Period: {sat.period_min} min
+                  </div>
+                </Popup>
+              </Marker>
+            ))}
+            {activeOverlay && weatherGrid.map((pt, i) => {
+              if (!pt.lat || !pt.lon) return null
+              let color = '#06b6d4'
+              let value = ''
+              if (activeOverlay === 'temp') {
+                const t = pt.temp
+                color = t > 35 ? '#ef4444' : t > 28 ? '#f97316' : t > 20 ? '#eab308' : t > 10 ? '#22c55e' : '#60a5fa'
+                value = `${t}°C`
+              } else if (activeOverlay === 'pressure') {
+                const p = pt.pressure
+                color = p < 1005 ? '#3b82f6' : p < 1013 ? '#06b6d4' : p < 1020 ? '#22c55e' : '#f97316'
+                value = `${p} hPa`
+              } else if (activeOverlay === 'wind') {
+                const w = pt.wind
+                color = w > 40 ? '#ef4444' : w > 25 ? '#f97316' : w > 15 ? '#eab308' : '#22c55e'
+                value = `${w} km/h`
+              }
+              return (
+                <Circle
+                  key={`wx-${i}`}
+                  center={[pt.lat, pt.lon]}
+                  radius={80000}
+                  pathOptions={{ fillColor: color, fillOpacity: 0.18, stroke: true, color, weight: 1, opacity: 0.35 }}
+                >
+                  <Popup>
+                    <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
+                      <b>{activeOverlay.toUpperCase()}</b>: {value}<br />
+                      {pt.lat.toFixed(2)}°N {pt.lon.toFixed(2)}°E
+                    </div>
+                  </Popup>
+                </Circle>
+              )
+            })}
           </MapContainer>
 
           {/* Map overlay stats */}
@@ -344,14 +497,115 @@ export default function MapPage() {
         {/* Sidebar - 1 col */}
         <div className="space-y-3 overflow-y-auto pr-1" style={{ maxHeight: 'calc(100vh - 210px)' }}>
 
+          {/* Weather Card */}
+          {weather && (
+            <GlassCard hover={false} className="p-3 border-cyan-500/10">
+              <p className="text-[9px] font-mono text-cyan-400 uppercase tracking-widest mb-2">Live Weather · Your Location</p>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">{weather.icon}</span>
+                  <div>
+                    <p className="text-lg font-bold text-white">{weather.temp}°C</p>
+                    <p className="text-[10px] text-[var(--text-muted)]">{weather.label}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-[var(--text-muted)] font-mono">Feels {weather.feels}°C</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <div className="bg-white/[0.02] rounded-lg p-2 text-center">
+                  <p className="text-xs font-bold text-cyan-400">{weather.humidity}%</p>
+                  <p className="text-[9px] text-[var(--text-muted)] font-mono">Humidity</p>
+                </div>
+                <div className="bg-white/[0.02] rounded-lg p-2 text-center">
+                  <p className="text-xs font-bold text-cyan-400">{weather.wind} km/h</p>
+                  <p className="text-[9px] text-[var(--text-muted)] font-mono">Wind</p>
+                </div>
+              </div>
+              <p className="text-[8px] text-[var(--text-muted)] font-mono mt-2 text-center">Open-Meteo · No API key · Live data</p>
+              {weatherGrid.length > 0 && (
+                <div className="mt-3 pt-2 border-t border-white/5">
+                  <p className="text-[9px] font-mono text-[var(--text-muted)] mb-1.5">MAP OVERLAY</p>
+                  <div className="grid grid-cols-3 gap-1">
+                    {[
+                      { key: 'temp', label: 'Temp', color: 'text-orange-400' },
+                      { key: 'pressure', label: 'Pressure', color: 'text-blue-400' },
+                      { key: 'wind', label: 'Wind', color: 'text-green-400' },
+                    ].map(o => (
+                      <button
+                        key={o.key}
+                        onClick={() => setActiveOverlay(activeOverlay === o.key ? null : o.key)}
+                        className={`py-1 rounded-lg text-[9px] font-mono font-bold border transition-all cursor-pointer ${
+                          activeOverlay === o.key
+                            ? `${o.color} bg-white/10 border-white/20`
+                            : 'text-[var(--text-muted)] border-white/5 hover:border-white/10'
+                        }`}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-1.5 flex gap-1 text-[8px] font-mono text-[var(--text-muted)] justify-between">
+                    {activeOverlay === 'temp' && <><span className="text-blue-400">■ Cold</span><span className="text-green-400">■ Mild</span><span className="text-orange-400">■ Hot</span><span className="text-red-400">■ Very Hot</span></>}
+                    {activeOverlay === 'pressure' && <><span className="text-blue-400">■ Low</span><span className="text-cyan-400">■ Normal</span><span className="text-orange-400">■ High</span></>}
+                    {activeOverlay === 'wind' && <><span className="text-green-400">■ Calm</span><span className="text-yellow-400">■ Moderate</span><span className="text-red-400">■ Strong</span></>}
+                  </div>
+                </div>
+              )}
+            </GlassCard>
+          )}
+
+          {/* Air Traffic & Satellite Card */}
+          <GlassCard hover={false} className="p-3 border-purple-500/10">
+            <p className="text-[9px] font-mono text-purple-400 uppercase tracking-widest mb-2">Live Traffic Layers</p>
+            <div className="space-y-2">
+              <button
+                onClick={handleToggleAircraft}
+                disabled={trafficLoading}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl border text-xs font-mono font-semibold transition-all cursor-pointer disabled:opacity-50 ${
+                  showAircraft
+                    ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
+                    : 'bg-white/[0.02] border-white/5 text-[var(--text-muted)] hover:border-white/10'
+                }`}
+              >
+                <span>✈️ Air Traffic</span>
+                <span className="text-[9px]">
+                  {showAircraft ? `${aircraft.length} aircraft` : 'OFF'}
+                </span>
+              </button>
+              <button
+                onClick={handleToggleSatellites}
+                disabled={trafficLoading}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl border text-xs font-mono font-semibold transition-all cursor-pointer disabled:opacity-50 ${
+                  showSatellites
+                    ? 'bg-purple-500/10 border-purple-500/30 text-purple-400'
+                    : 'bg-white/[0.02] border-white/5 text-[var(--text-muted)] hover:border-white/10'
+                }`}
+              >
+                <span>🛰️ Satellites</span>
+                <span className="text-[9px]">
+                  {showSatellites ? `${satellites.length} tracked` : 'OFF'}
+                </span>
+              </button>
+              {trafficLoading && (
+                <p className="text-[9px] text-[var(--text-muted)] font-mono text-center animate-pulse">Fetching live data...</p>
+              )}
+              {showAircraft && aircraft.length === 0 && !trafficLoading && (
+                <p className="text-[9px] text-yellow-400/70 font-mono text-center">No aircraft in range (OpenSky may rate-limit anonymous requests)</p>
+              )}
+            </div>
+            <p className="text-[8px] text-[var(--text-muted)] font-mono mt-2 text-center">OpenSky Network · Celestrak · Free APIs</p>
+          </GlassCard>
+
           {/* Search */}
           <GlassCard hover={false} className="p-3">
-            <div className="relative mb-3">
-              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+            <div className="flex items-center gap-2 glass-input py-2 px-3 mb-3">
+              <Search size={13} className="text-[var(--text-muted)] flex-shrink-0" />
               <input
                 type="text"
-                placeholder="Search cities, sites..."
-                className="glass-input w-full pl-8 py-2 text-xs"
+                placeholder="Search sites..."
+                className="bg-transparent outline-none text-xs w-full text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -397,7 +651,15 @@ export default function MapPage() {
               <MapPin size={13} className="text-green-400" />
               Recon Sites ({filteredMarkers.length})
             </h3>
-            <div className="space-y-1.5">
+            {!usingRealData ? (
+              <div className="py-6 flex flex-col items-center gap-2 text-center">
+                <MapPin size={22} className="text-[var(--text-muted)]" />
+                <p className="text-[10px] text-[var(--text-muted)] font-mono leading-relaxed">
+                  No recon sites yet.<br />Run an analysis to plot<br />real detection markers here.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
               {filteredMarkers.map((marker) => {
                 const TypeIcon = typeConfig[marker.type]?.icon || MapPin
                 return (
@@ -427,10 +689,9 @@ export default function MapPage() {
                   </motion.button>
                 )
               })}
-            </div>
+              </div>
+            )}
           </GlassCard>
-
-          {/* Selected detail card */}
           <AnimatePresence>
             {selectedMarker && (
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}>
