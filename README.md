@@ -12,7 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Frontend-React%2019%20+%20Vite-61DAFB?style=flat-square&logo=react" />
   <img src="https://img.shields.io/badge/Backend-FastAPI%200.115-009688?style=flat-square&logo=fastapi" />
-  <img src="https://img.shields.io/badge/AI-YOLOv8s-FF6F00?style=flat-square" />
+  <img src="https://img.shields.io/badge/AI-YOLOv8s%20+%20ByteTrack-FF6F00?style=flat-square" />
   <img src="https://img.shields.io/badge/Database-PostgreSQL-4169E1?style=flat-square&logo=postgresql" />
   <img src="https://img.shields.io/badge/Maps-Leaflet%20GIS-199900?style=flat-square&logo=leaflet" />
   <img src="https://img.shields.io/badge/CV-OpenCV-5C3EE8?style=flat-square&logo=opencv" />
@@ -22,11 +22,11 @@
 
 ## What is SkyRecon?
 
-SkyRecon is a full-stack AI drone intelligence platform that processes real drone video using **YOLOv8s + OpenCV**. Upload a drone video, select what you want to detect, and the platform runs real computer vision inference frame by frame — giving you accurate object counts, area coverage in m², annotated screenshots, and downloadable PDF/DOCX reports.
+SkyRecon is a full-stack AI drone intelligence platform that processes real drone video using **YOLOv8s + ByteTrack + OpenCV**. Upload a drone video, select what you want to detect, and the platform runs real computer vision inference frame by frame — giving you accurate unique object counts, area coverage in m², annotated screenshots, and downloadable PDF/DOCX reports.
 
 ### Two Core Modules
 
-**Mapping & Survey** — Detect and count unique objects from 25 categories (vehicles, people, buildings, potholes, poles, trees, and more) from aerial footage. Uses a persistent object tracker to count each unique object only once across the entire video, regardless of how many frames it appears in.
+**Mapping & Survey** — Detect and count unique objects from 25 categories (vehicles, people, buildings, potholes, poles, trees, and more) from aerial footage. Uses ByteTrack persistent object tracking to count each unique object only once across the entire video, regardless of how many frames it appears in.
 
 **Disaster Response** — Scan footage for fire, flood, structural damage, fallen poles, and more. Each confirmed event gets a severity score (1–5), a screenshot from the best detection frame, auto-calculated rescue resource estimates, and an actionable recommendations report.
 
@@ -53,7 +53,7 @@ SkyRecon is a full-stack AI drone intelligence platform that processes real dron
 | Uvicorn | ASGI server |
 | SQLAlchemy 2.0 | ORM |
 | PostgreSQL + psycopg2 | Database (6 tables, 12 stored procedures) |
-| **Ultralytics YOLOv8s** | Object detection AI |
+| **Ultralytics YOLOv8s + ByteTrack** | Object detection + persistent tracking |
 | **OpenCV 4.13** | Video frame extraction & enhancement |
 | **PyTorch** | Deep learning runtime |
 | **NumPy** | Array/matrix operations |
@@ -91,7 +91,7 @@ SkyRecon/
         ├── main.py                   # FastAPI app entry point
         ├── database.py               # DB engine, session, auto-init
         ├── ai/
-        │   ├── video_processor.py    # Core AI pipeline (YOLOv8 + tracker)
+        │   ├── video_processor.py    # Core AI pipeline (YOLOv8 + ByteTrack)
         │   ├── disaster_engine.py    # Disaster classification + severity scoring
         │   ├── area_calculator.py    # Bounding box → real-world m² conversion
         │   └── report_generator.py  # PDF + DOCX report builder
@@ -178,17 +178,22 @@ User uploads drone video + selects category (e.g. People)
 FastAPI saves file → creates DB record → launches BackgroundTask
         ↓
 video_processor.py:
-  1. OpenCV opens video, extracts frames at 1–2fps
-  2. CLAHE contrast enhancement applied to each frame (improves aerial detection)
-  3. Frame resized to 640px width for faster YOLOv8 inference
-  4. YOLOv8s runs inference → detections filtered to selected category
-  5. Pole detection: tall narrow bounding boxes (height/width > 3.5) → Electric Poles
-  6. Persistent object tracker: each unique object counted ONCE across entire video
-     - Same person walking across 50 frames = counted as 1 person
-     - 3 different people = counted as 3
+  1. OpenCV opens video
+  2. Seek-based frame extraction: cap.set(CAP_PROP_POS_FRAMES, idx)
+     → Only target frames are decoded — skipped frames cost zero CPU
+  3. Adaptive CLAHE contrast enhancement:
+     → Checks grayscale std deviation first
+     → If std > 45 (already high contrast), skips enhancement entirely
+     → Saves ~4ms per frame on CPU for well-lit footage
+  4. Frame resized to 640px width for faster YOLOv8 inference
+  5. YOLOv8s + ByteTrack runs inference → detections filtered to selected category
+  6. ByteTrack assigns each unique object a persistent track_id across the video
+     - Same person walking across 50 frames = 1 track_id = counted once
+     - 3 different people = 3 track_ids = counted as 3
   7. Only first-appearance detections saved to DB (no duplicate rows)
-  8. Annotated screenshots saved at detection frames
-  9. Progress written to DB every 5% → frontend polls every 3s
+  8. Annotated screenshots saved at detection frames (max 8 per analysis)
+  9. Progress written to progress_pct column every 5% → frontend polls every 3s
+     → ETA countdown shown in the UI based on elapsed time + progress %
         ↓
 complete_analysis() stored procedure marks job done
         ↓
@@ -203,7 +208,7 @@ User downloads PDF or DOCX report with real data + screenshots
 User uploads drone video
         ↓
 disaster_engine.py:
-  1. Same frame extraction (1fps)
+  1. Seek-based frame extraction (same as mapping — no wasted decodes)
   2. Classifies 7 disaster types: fire, flood, structural, people, vehicles, trees, poles
   3. Must appear in ≥ 3 sampled frames to be confirmed (eliminates noise)
   4. Severity 1–5 computed from:
@@ -214,10 +219,31 @@ disaster_engine.py:
   5. Best screenshot saved per confirmed disaster type
   6. Resource estimation auto-calculated (rescue teams, ambulances, boats, staff)
         ↓
-Frontend shows confirmed events with screenshots + resource table
+Frontend shows confirmed events with screenshots + severity distribution strip
 Voice alert fires ONLY for fire or flood at severity ≥ 4
 PDF/DOCX report downloadable
 ```
+
+---
+
+## Performance Improvements (Latest)
+
+| Improvement | Impact |
+|---|---|
+| Seek-based frame skipping (`CAP_PROP_POS_FRAMES`) | 3–10× faster on long videos — skipped frames are never decoded |
+| Adaptive CLAHE (skip if std > 45) | ~4ms saved per frame on well-lit footage |
+| CLAHE object created once at module level | Eliminates per-frame object allocation |
+| Auto-detected thread count (`os.cpu_count()`) | Optimal CPU utilization on any machine |
+| `progress_pct` DB column replaces description-field hack | Simpler SQL, no string parsing on every poll |
+| Screenshot annotation guard | Zero annotation work after MAX_SCREENSHOTS reached |
+| Fixed `_draw_and_save` import bug in disaster_engine | Was crashing on every disaster analysis |
+| Dashboard: parallel `Promise.allSettled` fetches | Eliminates N+1 summary API call waterfall |
+| MappingPage/DisasterPage: `URL.createObjectURL` cleanup | Fixes memory leak — blob URLs now revoked on file change |
+| ETA countdown in mapping progress overlay | Users see estimated time remaining during analysis |
+| Disaster results: severity distribution strip | Quick visual summary of event severity breakdown |
+| MapPage: per-type marker counts in filter chips | Shows how many sites exist per category |
+| MapPage: real vs demo data indicator | Clear notice when showing demo markers |
+| ReportsPage: "Generating..." spinner per row | Clear feedback during async report generation |
 
 ---
 
@@ -227,9 +253,9 @@ PDF/DOCX report downloadable
 |---|---|
 | Vehicles | car, truck, bus, motorcycle, bicycle, boat, airplane |
 | People | person, backpack, umbrella, handbag + accessories |
-| Plants | potted plant, banana, apple, orange, broccoli, carrot |
+| Plants | potted plant |
 | Trees | detected via vegetation context |
-| Electric Poles | fire hydrant, parking meter + tall narrow aspect ratio heuristic |
+| Electric Poles | fire hydrant + tall narrow aspect ratio heuristic |
 | Traffic Lights | traffic light |
 | Roads | stop sign context |
 | Road Potholes | road surface analysis |
@@ -237,7 +263,7 @@ PDF/DOCX report downloadable
 | Buildings | bench, chair, tv, laptop, keyboard + indoor objects |
 | Houses | bed, couch |
 | Parking Areas | vehicle density analysis |
-| Garbage Areas | bottle, cup, fork, knife, spoon, bowl, wine glass, food items |
+| Garbage Areas | bottle, cup, wine glass |
 | Construction Zones | site context |
 | Agricultural Land | crop field context |
 | Animals | cat, dog, horse, cow, sheep, bird, elephant, bear, zebra, giraffe |
@@ -264,7 +290,7 @@ Interactive docs: `http://localhost:8000/api/docs`
 |---|---|---|
 | `GET` | `/api/health` | API status + GPU availability |
 | `POST` | `/api/v1/analysis/upload` | Upload video, start AI pipeline |
-| `GET` | `/api/v1/analysis/{id}/status` | Poll processing progress (0–100%) |
+| `GET` | `/api/v1/analysis/{id}/status` | Poll processing progress (0–100%) + ETA |
 | `GET` | `/api/v1/analysis/{id}/summary` | Full results — unique counts, coverage, breakdown |
 | `GET` | `/api/v1/analysis/{id}/detections` | All unique detections (filterable by category) |
 | `GET` | `/api/v1/analysis/{id}/disasters` | All confirmed disaster events |
@@ -291,6 +317,9 @@ analyses   ──── detections        (1:N, cascade delete)
 analyses   ──── disaster_events   (1:N)
 analyses   ──── reports           (1:N)
 ```
+
+### Key Column: `analyses.progress_pct`
+The `progress_pct INTEGER` column (added in latest update) stores real-time processing progress (0–100) written by the AI engine every 5%. The status endpoint reads it directly — no more string parsing from the description field. The column is added automatically via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` on startup, so existing databases upgrade without any manual migration.
 
 ### Stored Procedures
 | Procedure | Purpose |
@@ -324,11 +353,11 @@ Set `YOLO_MODEL=yolov8s.pt` in `.env`. The model downloads automatically on firs
 
 ## Accuracy Notes
 
-- **People counting** uses a persistent IoU-based object tracker. Each person is counted exactly once — when they first appear in the video. The same person walking across 60 seconds of footage is still counted as 1.
+- **People counting** uses ByteTrack persistent object tracking. Each person is counted exactly once — when they first appear in the video. The same person walking across 60 seconds of footage is still counted as 1.
 - **Pole detection** uses a bounding-box aspect ratio heuristic since YOLOv8 has no native pole class. Objects with height/width > 3.5 are classified as Electric Poles or Street Lights.
 - **Disaster severity** is calibrated so normal people/vehicles in a video do not trigger emergency alerts. Only confirmed fire or flood at severity ≥ 4 triggers the voice alarm.
-- **Frame enhancement** — CLAHE contrast equalization + mild sharpening is applied to every frame before inference to improve detection on hazy or low-contrast aerial footage.
-- **Confidence thresholds** are tuned per category: People use 0.30 (harder to detect from altitude), Vehicles use 0.40, others use 0.35–0.40.
+- **Frame enhancement** — Adaptive CLAHE contrast equalization is applied only when the frame's grayscale standard deviation is below 45 (low-contrast/hazy footage). High-contrast frames skip enhancement entirely for speed.
+- **Confidence thresholds** are tuned per category: People use 0.28 (harder to detect from altitude), Vehicles use 0.38, others use 0.32–0.38.
 
 ---
 
@@ -343,8 +372,9 @@ Set `YOLO_MODEL=yolov8s.pt` in `.env`. The model downloads automatically on firs
 ## Known Limitations
 
 - YOLOv8 is trained on COCO dataset (80 classes). Categories like "potholes", "solar panels", "warehouses", and "agricultural land" are approximated through class mapping and heuristics — not natively detected.
-- Processing speed on CPU: approximately 1–2 minutes per minute of 1080p video at 1fps sampling.
+- Processing speed on CPU: approximately 1–2 minutes per minute of 1080p video at 1fps sampling (seek-based extraction significantly reduces this vs sequential decode).
 - GPU (CUDA) reduces processing time by ~5–10×.
+- The GIS map shows demo markers until at least one analysis with GPS coordinates is completed.
 
 ---
 

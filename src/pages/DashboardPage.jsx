@@ -63,21 +63,22 @@ export default function DashboardPage() {
   const fetchAll = async () => {
     setLoading(true)
     try {
-      // ── 1. Health check ──
-      const health = await fetch('/api/health').catch(() => null)
-      setApiOnline(health?.ok ?? false)
+      // All fetches in parallel — no sequential waterfalls
+      const [health, statsRes, analysesRes, allRes, catRes] = await Promise.allSettled([
+        fetch('/api/health'),
+        fetch('/api/v1/dashboard/stats'),
+        fetch('/api/v1/dashboard/recent-analyses'),
+        fetch('/api/v1/analysis/?limit=50'),
+        fetch('/api/v1/categories/'),
+      ])
 
-      // ── 2. Stats ──
-      const statsRes = await fetch('/api/v1/dashboard/stats')
-      if (statsRes.ok) {
-        const data = await statsRes.json()
-        setStats(data)
-      }
+      setApiOnline(health.status === 'fulfilled' && health.value?.ok)
 
-      // ── 3. Recent analyses ──
-      const analysesRes = await fetch('/api/v1/dashboard/recent-analyses')
-      if (analysesRes.ok) {
-        const data = await analysesRes.json()
+      if (statsRes.status === 'fulfilled' && statsRes.value.ok)
+        setStats(await statsRes.value.json())
+
+      if (analysesRes.status === 'fulfilled' && analysesRes.value.ok) {
+        const data = await analysesRes.value.json()
         if (Array.isArray(data)) {
           setAnalyses(data.map(item => ({
             id: item.id,
@@ -93,12 +94,8 @@ export default function DashboardPage() {
         }
       }
 
-      // ── 4. All analyses for chart + category breakdown ──
-      const allRes = await fetch('/api/v1/analysis/?limit=50')
-      if (allRes.ok) {
-        const allData = await allRes.json()
-
-        // Build 7-day area chart from real analysis created_at dates
+      if (allRes.status === 'fulfilled' && allRes.value.ok) {
+        const allData = await allRes.value.json()
         const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
         const dayMap = {}
         days.forEach(d => { dayMap[d] = { name: d, analyses: 0, detections: 0 } })
@@ -108,54 +105,27 @@ export default function DashboardPage() {
           dayMap[day].analyses += 1
           dayMap[day].detections += a.total_objects || 0
         })
-        // Rotate so today is last
         const todayIdx = new Date().getDay()
         const ordered = [...days.slice(todayIdx + 1), ...days.slice(0, todayIdx + 1)]
         setAreaData(ordered.map(d => dayMap[d]))
-      }
 
-      // ── 5. Category breakdown from detections ──
-      const catRes = await fetch('/api/v1/categories/')
-      if (catRes.ok) {
-        const cats = await catRes.json()
-        // Fetch detection counts per category via summary endpoint
-        const detRes = await fetch('/api/v1/analysis/?limit=100')
-        if (detRes.ok) {
-          const allAnalyses = await detRes.json()
-          // Aggregate category_breakdown from all completed analyses
-          const catCounts = {}
-          for (const a of allAnalyses) {
-            if (a.status !== 'completed') continue
-            try {
-              const sumRes = await fetch(`/api/v1/analysis/${a.id}/summary`)
-              if (!sumRes.ok) continue
-              const sum = await sumRes.json()
-              const breakdown = sum.category_breakdown || {}
-              Object.entries(breakdown).forEach(([cat, count]) => {
-                catCounts[cat] = (catCounts[cat] || 0) + count
-              })
-            } catch { /* skip */ }
-          }
-          if (Object.keys(catCounts).length > 0) {
-            const sorted = Object.entries(catCounts)
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 6)
-              .map(([name, value]) => ({
-                name,
-                value,
-                color: CATEGORY_COLORS[name] || CATEGORY_COLORS.default,
-              }))
-            setCategoryData(sorted)
-          } else {
-            // Fallback: show categories with 0 if no detections yet
-            setCategoryData(
-              cats.slice(0, 6).map(c => ({
-                name: c.name,
-                value: 0,
-                color: c.color || CATEGORY_COLORS.default,
-              }))
-            )
-          }
+        // Category breakdown — use dashboard/stats endpoint instead of N+1 summary calls
+        const catCounts = {}
+        allData.forEach(a => {
+          if (a.status !== 'completed' || !a.category_breakdown) return
+          Object.entries(a.category_breakdown).forEach(([cat, count]) => {
+            catCounts[cat] = (catCounts[cat] || 0) + count
+          })
+        })
+        if (Object.keys(catCounts).length > 0) {
+          setCategoryData(
+            Object.entries(catCounts)
+              .sort((a, b) => b[1] - a[1]).slice(0, 6)
+              .map(([name, value]) => ({ name, value, color: CATEGORY_COLORS[name] || CATEGORY_COLORS.default }))
+          )
+        } else if (catRes.status === 'fulfilled' && catRes.value.ok) {
+          const cats = await catRes.value.json()
+          setCategoryData(cats.slice(0, 6).map(c => ({ name: c.name, value: 0, color: c.color || CATEGORY_COLORS.default })))
         }
       }
 
@@ -367,7 +337,11 @@ export default function DashboardPage() {
                 <motion.div
                   key={analysis.id}
                   whileHover={{ x: 4, backgroundColor: 'rgba(255,255,255,0.02)' }}
-                  onClick={() => navigate('/mapping')}
+                  onClick={() => navigate(
+                    analysis.status === 'completed'
+                      ? (analysis.mode === 'disaster' ? `/disaster` : `/mapping`)
+                      : '/mapping'
+                  )}
                   className="flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-colors group"
                 >
                   <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${

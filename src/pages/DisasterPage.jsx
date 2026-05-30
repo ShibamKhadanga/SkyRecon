@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { 
   AlertTriangle, Upload, ArrowRight, Play, Cpu, 
   FileDown, ShieldAlert, Clock, Image, Flame, CheckCircle,
-  Volume2, VolumeX, Radio, Wifi, WifiOff, Shield, HeartHandshake, HelpCircle
+  Volume2, VolumeX, Radio, Wifi, WifiOff, Shield, HeartHandshake, HelpCircle,
+  BarChart2
 } from 'lucide-react'
 import FileDropzone from '../components/ui/FileDropzone'
 import GlassCard from '../components/ui/GlassCard'
@@ -63,6 +64,7 @@ const mockDetections = [
 
 export default function DisasterPage() {
   const [file, setFile] = useState(null)
+  const [videoUrl, setVideoUrl] = useState(null)
   const [scanning, setScanning] = useState(false)
   const [scanProgress, setScanProgress] = useState(0)
   const [showReport, setShowReport] = useState(false)
@@ -88,6 +90,13 @@ export default function DisasterPage() {
     u.rate = 0.92
     window.speechSynthesis.speak(u)
   }
+
+  useEffect(() => {
+    if (!file) { setVideoUrl(null); return }
+    const url = URL.createObjectURL(file)
+    setVideoUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
@@ -239,7 +248,7 @@ export default function DisasterPage() {
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
               <GlassCard hover={false}>
                 <div className="rounded-xl overflow-hidden bg-black/40 aspect-video flex items-center justify-center relative">
-                  <video src={URL.createObjectURL(file)} controls className="w-full h-full object-contain" />
+                  <video src={videoUrl} controls className="w-full h-full object-contain" />
                   {scanning && (
                     <div className="absolute inset-0 bg-black/75 flex flex-col items-center justify-center p-4">
                       <Cpu size={40} className="text-red-400 animate-spin mb-4" />
@@ -322,6 +331,25 @@ export default function DisasterPage() {
                 </button>
               </div>
             </div>
+
+            {/* Severity summary strip — shown when events exist */}
+            {realEvents.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-2">
+                {[1,2,3,4,5].map(lvl => {
+                  const count = realEvents.filter(e => e.severity === lvl).length
+                  if (count === 0) return null
+                  const colors = ['','text-green-400 bg-green-500/10 border-green-500/20','text-lime-400 bg-lime-500/10 border-lime-500/20','text-yellow-400 bg-yellow-500/10 border-yellow-500/20','text-orange-400 bg-orange-500/10 border-orange-500/20','text-red-400 bg-red-500/10 border-red-500/20']
+                  return (
+                    <span key={lvl} className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold border ${colors[lvl]}`}>
+                      L{lvl}: {count} event{count > 1 ? 's' : ''}
+                    </span>
+                  )
+                })}
+                <span className="px-2.5 py-1 rounded-lg text-[10px] font-mono border border-white/10 text-[var(--text-muted)]">
+                  Max severity: {Math.max(...realEvents.map(e => e.severity))}
+                </span>
+              </div>
+            )}
 
             {/* Simulated Detections Cards & Dynamic Resource Estimator Grid */}
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">

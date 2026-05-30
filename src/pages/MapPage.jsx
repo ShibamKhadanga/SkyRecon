@@ -138,6 +138,7 @@ export default function MapPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [filterType, setFilterType] = useState('all')
   const [markers, setMarkers] = useState(mockMarkers)
+  const [usingRealData, setUsingRealData] = useState(false)
 
   // Auto-detect user location on mount
   useEffect(() => {
@@ -180,12 +181,13 @@ export default function MapPage() {
             severity: m.severity,
             color: m.color || '#22c55e',
             detections: m.detections || 1,
-            desc: `Dynamic detection marker recorded inside database (lat: ${m.lat.toFixed(4)}, lon: ${m.lon.toFixed(4)}).`
+            desc: `Detection marker from database (lat: ${m.lat.toFixed(4)}, lon: ${m.lon.toFixed(4)}).`
           }))
           setMarkers(parsed)
+          setUsingRealData(true)
         }
       })
-      .catch((err) => console.log('Using local high-fidelity GIS mock markers:', err))
+      .catch((err) => console.log('Using demo GIS markers:', err))
   }, [])
 
   const handleLocateMe = () => {
@@ -225,6 +227,9 @@ export default function MapPage() {
               <span className="ml-2 text-green-400 font-mono text-xs">
                 📍 {userLocation[0].toFixed(4)}°N, {userLocation[1].toFixed(4)}°E
               </span>
+            )}
+            {!usingRealData && (
+              <span className="ml-2 text-yellow-400/70 font-mono text-xs">· Demo markers (run an analysis to see real data)</span>
             )}
           </p>
         </div>
@@ -369,7 +374,7 @@ export default function MapPage() {
                     filterType !== type ? 'text-[var(--text-muted)] border-white/5 hover:border-white/10' : ''
                   }`}
                 >
-                  {cfg.label.toUpperCase()}
+                  {cfg.label.toUpperCase()} ({markers.filter(m => m.type === type).length})
                 </button>
               ))}
             </div>

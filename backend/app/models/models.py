@@ -42,6 +42,7 @@ class Analysis(Base):
     custom_query = Column(Text)
     status = Column(String(50), default="pending")  # pending, processing, completed, failed
     total_objects = Column(Integer, default=0)
+    progress_pct = Column(Integer, default=0)  # 0-100, written by AI engine
     processing_time = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime)

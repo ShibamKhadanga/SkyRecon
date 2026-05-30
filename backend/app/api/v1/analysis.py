@@ -188,20 +188,13 @@ async def upload_video(
 def get_status(analysis_id: int, db: Session = Depends(get_db)):
     """Poll this endpoint to track real processing progress."""
     row = db.execute(
-        text("SELECT status, total_objects, processing_time, description FROM analyses WHERE id=:id"),
+        text("SELECT status, total_objects, processing_time, progress_pct FROM analyses WHERE id=:id"),
         {"id": analysis_id}
     ).first()
     if not row:
         raise HTTPException(404, "Analysis not found")
 
-    # Extract real progress % written by the AI engine into description field
-    progress = 0
-    if row.description and "||PROGRESS||" in row.description:
-        try:
-            progress = int(row.description.split("||PROGRESS||")[-1])
-        except Exception:
-            progress = 0
-
+    progress = row.progress_pct or 0
     if row.status == "completed":
         progress = 100
     elif row.status == "failed":

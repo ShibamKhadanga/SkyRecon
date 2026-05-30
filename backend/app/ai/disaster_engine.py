@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from ..core.config import settings
-from .video_processor import _save_screenshot, _draw_and_save, FRAMES_PER_SECOND, _write_progress, _get_model
+from .video_processor import _save_screenshot, FRAMES_PER_SECOND, _write_progress, _get_model
 
 logger = logging.getLogger(__name__)
 
@@ -175,44 +175,38 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
                             best_frames[dtype] = (frame.copy(), event["confidence"], frame_idx, timestamp_sec)
             _write_progress(db, analysis_id, 90, 0)
         else:
-            frame_idx = 0
-            while True:
+            for frame_idx in range(0, total_frames, frame_interval):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
                 if not ret:
                     break
 
-                if frame_idx % frame_interval == 0:
-                    timestamp_sec = frame_idx / fps
+                timestamp_sec = frame_idx / fps
 
-                    # Resize before inference for CPU speed
-                    h, w = frame.shape[:2]
-                    if w > 640:
-                        frame_small = cv2.resize(frame, (640, int(h * 640 / w)))
-                    else:
-                        frame_small = frame
+                # Resize before inference for CPU speed
+                h, w = frame.shape[:2]
+                frame_small = cv2.resize(frame, (640, int(h * 640 / w))) if w > 640 else frame
 
-                    results = model(frame_small, verbose=False, conf=settings.CONFIDENCE_THRESHOLD)
+                results = model(frame_small, verbose=False, conf=settings.CONFIDENCE_THRESHOLD)
 
-                    for result in results:
-                        if result.boxes is None or len(result.boxes) == 0:
-                            continue
-                        for event in _classify_frame_disaster(frame, result.boxes, model.names):
-                            dtype = event["type"]
-                            event_accumulator.setdefault(dtype, []).append(
-                                {**event, "frame_idx": frame_idx, "timestamp": timestamp_sec}
-                            )
-                            if dtype not in best_frames or event["confidence"] > best_frames[dtype][1]:
-                                best_frames[dtype] = (frame.copy(), event["confidence"], frame_idx, timestamp_sec)
+                for result in results:
+                    if result.boxes is None or len(result.boxes) == 0:
+                        continue
+                    for event in _classify_frame_disaster(frame, result.boxes, model.names):
+                        dtype = event["type"]
+                        event_accumulator.setdefault(dtype, []).append(
+                            {**event, "frame_idx": frame_idx, "timestamp": timestamp_sec}
+                        )
+                        if dtype not in best_frames or event["confidence"] > best_frames[dtype][1]:
+                            best_frames[dtype] = (frame.copy(), event["confidence"], frame_idx, timestamp_sec)
 
-                    # Write real progress
-                    if total_frames > 0:
-                        pct = min(90, int((frame_idx / total_frames) * 100))
-                        if pct >= last_progress + 5:
-                            _write_progress(db, analysis_id, pct, 0)
-                            last_progress = pct
-                            logger.info(f"[AI] Disaster progress: {pct}%")
+                if total_frames > 0:
+                    pct = min(90, int((frame_idx / total_frames) * 100))
+                    if pct >= last_progress + 5:
+                        _write_progress(db, analysis_id, pct, 0)
+                        last_progress = pct
+                        logger.info(f"[AI] Disaster progress: {pct}%")
 
-                frame_idx += 1
             cap.release()
 
         # ── Persist confirmed events ──
@@ -265,7 +259,6 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
             )
             new_event_id = result.scalar()
 
-            # ── FIX: Use the returned ID directly — no ORDER BY/LIMIT needed ──
             if screenshot_path and new_event_id:
                 db.execute(
                     text("UPDATE disaster_events SET screenshot_path=:path WHERE id=:id"),

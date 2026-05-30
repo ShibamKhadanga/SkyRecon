@@ -265,16 +265,18 @@ export default function ReportsPage() {
                       disabled={isDownloading}
                       className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-white/5 hover:border-green-500/30 text-xs font-mono text-[var(--text-secondary)] hover:text-white transition-colors cursor-pointer disabled:opacity-40"
                     >
-                      <Download size={12} />
-                      {isDownloading && downloading === `${aid}-pdf` ? '...' : 'PDF'}
+                      {isDownloading && downloading === `${aid}-pdf`
+                        ? <><RefreshCw size={12} className="animate-spin" /> Generating...</>
+                        : <><Download size={12} /> PDF</>}
                     </button>
                     <button
                       onClick={() => handleDownload(report, 'docx')}
                       disabled={isDownloading}
                       className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-white/5 hover:border-blue-500/30 text-xs font-mono text-[var(--text-secondary)] hover:text-white transition-colors cursor-pointer disabled:opacity-40"
                     >
-                      <Download size={12} />
-                      {isDownloading && downloading === `${aid}-docx` ? '...' : 'DOCX'}
+                      {isDownloading && downloading === `${aid}-docx`
+                        ? <><RefreshCw size={12} className="animate-spin" /> Generating...</>
+                        : <><Download size={12} /> DOCX</>}
                     </button>
                     <button
                       onClick={() => handleDelete(report)}

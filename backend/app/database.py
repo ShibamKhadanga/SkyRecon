@@ -55,15 +55,17 @@ def _create_database_if_not_exists():
 
 def init_db():
     """Create all tables and install PL/pgSQL stored procedures."""
-    # Ensure database exists before creating tables
     _create_database_if_not_exists()
-    
     Base.metadata.create_all(bind=engine)
 
-    # Install stored procedures defined in the SQL init script
+    # Add progress_pct column if upgrading from older schema (idempotent)
+    with engine.connect() as conn:
+        conn.execute(text("""
+            ALTER TABLE analyses ADD COLUMN IF NOT EXISTS progress_pct INTEGER DEFAULT 0
+        """))
+        conn.commit()
+
     _install_stored_procedures()
-    
-    # Automatically seed the database with rich mock data using PL/pgSQL if empty
     from .core.seeder import seed_mock_data_if_empty
     db = SessionLocal()
     try:
