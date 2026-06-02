@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { 
   Map, AlertTriangle, Crosshair, Satellite, Shield, Cpu, 
   Radio, Eye, Radar, ChevronRight, Zap, Globe, Activity
@@ -88,21 +88,14 @@ function HeroStat({ icon: Icon, value, label, suffix = '', delay = 0 }) {
 
 export default function LandingPage() {
   const navigate = useNavigate()
-  const [showContent, setShowContent] = useState(false)
   const [hoveredModule, setHoveredModule] = useState(null)
 
-  const typedText = useTypingEffect([
-    'AI Powered Aerial Intelligence',
+  const typedText = useTypingEffect([    'AI Powered Aerial Intelligence',
     'Smart City Surveillance',
     'Disaster Detection & Response',
     'Real-Time Drone Analytics',
     'Infrastructure Monitoring',
   ])
-
-  useEffect(() => {
-    const timer = setTimeout(() => setShowContent(true), 600)
-    return () => clearTimeout(timer)
-  }, [])
 
   const modules = [
     {
@@ -181,14 +174,11 @@ export default function LandingPage() {
 
       {/* ─── Content ─── */}
       <div className="relative z-10 min-h-screen flex flex-col items-center justify-center px-4 py-8">
-        
-        <AnimatePresence>
-          {showContent && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="w-full max-w-5xl mx-auto"
-            >
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="w-full max-w-5xl mx-auto"
+        >
               {/* Top: Radar + Branding */}
               <div className="flex flex-col items-center mb-12">
                 {/* Radar */}
@@ -396,9 +386,7 @@ export default function LandingPage() {
                   <Activity size={10} /> Real-Time
                 </span>
               </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        </motion.div>
       </div>
     </div>
   )

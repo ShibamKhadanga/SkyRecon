@@ -15,23 +15,23 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from ..core.config import settings
-from .video_processor import _save_screenshot, FRAMES_PER_SECOND, _write_progress, _get_model
+from .video_processor import _save_screenshot, FRAMES_PER_SECOND, _write_progress, _get_model, _get_model_for_category
 
 logger = logging.getLogger(__name__)
 
 DISASTER_TRIGGERS: dict[str, list[str]] = {
-    "fire":       ["fire", "flame"],
-    "flood":      ["boat", "water"],
-    "structural": ["building", "house"],
+    "fire":       [],
+    "flood":      ["boat"],
+    "structural": [],
     "people":     ["person"],
-    "vehicles":   ["car", "truck", "bus"],
-    "trees":      ["tree"],
-    "poles":      ["pole"],
+    "vehicles":   ["car", "truck", "bus", "motorcycle", "bicycle"],
+    "trees":      [],
+    "poles":      ["traffic light", "stop sign"],
 }
 
 DISASTER_RELEVANT_CLASSES = {
-    "person", "car", "truck", "bus", "motorcycle",
-    "boat", "fire hydrant", "stop sign",
+    "person", "car", "truck", "bus", "motorcycle", "bicycle",
+    "boat", "fire hydrant", "traffic light", "stop sign",
 }
 
 SEVERITY_WEIGHTS = {
@@ -75,6 +75,48 @@ DISASTER_RECOMMENDATIONS = {
 }
 
 
+def _region_hsv_ratio(frame: np.ndarray, lower: list[int], upper: list[int]) -> float:
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, np.array(lower), np.array(upper))
+    return cv2.countNonZero(mask) / max(1, frame.shape[0] * frame.shape[1])
+
+
+def _detect_fire_smoke(frame: np.ndarray) -> tuple[float, float]:
+    fire_ratio = _region_hsv_ratio(frame, [0, 120, 120], [30, 255, 255])
+    smoke_ratio = _region_hsv_ratio(frame, [0, 0, 120], [180, 60, 240])
+    return fire_ratio, smoke_ratio
+
+
+def _detect_flood_water(frame: np.ndarray) -> float:
+    blue_ratio = _region_hsv_ratio(frame, [90, 30, 30], [140, 255, 255])
+    grey_ratio = _region_hsv_ratio(frame, [0, 0, 80], [180, 55, 200])
+    return max(blue_ratio, grey_ratio)
+
+
+def _detect_structural_damage(frame: np.ndarray) -> bool:
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 40, 100)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    h, w = frame.shape[:2]
+    strong_rectangles = 0
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < (w * h) * 0.01:
+            continue
+        peri = cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, 0.03 * peri, True)
+        if len(approx) < 4 or len(approx) > 6:
+            continue
+        x, y, bw, bh = cv2.boundingRect(approx)
+        aspect = bw / max(bh, 1)
+        if 0.3 < aspect < 3.5:
+            strong_rectangles += 1
+    return strong_rectangles >= 3
+
+
 def _compute_severity(disaster_type: str, detection_count: int,
                       avg_confidence: float, affected_area_ratio: float) -> int:
     base = SEVERITY_WEIGHTS.get(disaster_type, 2)
@@ -101,7 +143,14 @@ def _classify_frame_disaster(frame: np.ndarray, boxes, names: dict) -> list[dict
                 matched_type = dtype
                 break
         if matched_type is None and cls_name in DISASTER_RELEVANT_CLASSES:
-            matched_type = "people" if cls_name == "person" else "vehicles"
+            if cls_name == "person":
+                matched_type = "people"
+            elif cls_name in {"car", "truck", "bus", "motorcycle", "bicycle"}:
+                matched_type = "vehicles"
+            elif cls_name == "boat":
+                matched_type = "flood"
+            elif cls_name in {"traffic light", "stop sign"}:
+                matched_type = "poles"
         if matched_type is None:
             continue
 
@@ -162,7 +211,13 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
 
         if is_image:
             for frame_idx, timestamp_sec, frame in frames_iter:
-                results = model(frame, verbose=False, conf=settings.CONFIDENCE_THRESHOLD)
+                results = model(
+                    frame,
+                    verbose=False,
+                    conf=settings.CONFIDENCE_THRESHOLD,
+                    agnostic_nms=False,
+                    max_det=300,
+                )
                 for result in results:
                     if result.boxes is None or len(result.boxes) == 0:
                         continue
@@ -173,6 +228,38 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
                         )
                         if dtype not in best_frames or event["confidence"] > best_frames[dtype][1]:
                             best_frames[dtype] = (frame.copy(), event["confidence"], frame_idx, timestamp_sec)
+
+                fire_ratio, smoke_ratio = _detect_fire_smoke(frame)
+                if fire_ratio > 0.007 or smoke_ratio > 0.02:
+                    event_accumulator.setdefault("fire", []).append({
+                        "type": "fire",
+                        "confidence": min(0.95, 0.35 + max(fire_ratio, smoke_ratio) * 2.5),
+                        "area_ratio": max(fire_ratio, smoke_ratio),
+                        "count": 1,
+                        "frame_idx": frame_idx,
+                        "timestamp": timestamp_sec,
+                    })
+
+                water_ratio = _detect_flood_water(frame)
+                if water_ratio > 0.035:
+                    event_accumulator.setdefault("flood", []).append({
+                        "type": "flood",
+                        "confidence": min(0.92, 0.30 + water_ratio * 2.0),
+                        "area_ratio": water_ratio,
+                        "count": 1,
+                        "frame_idx": frame_idx,
+                        "timestamp": timestamp_sec,
+                    })
+
+                if _detect_structural_damage(frame):
+                    event_accumulator.setdefault("structural", []).append({
+                        "type": "structural",
+                        "confidence": 0.54,
+                        "area_ratio": 0.12,
+                        "count": 1,
+                        "frame_idx": frame_idx,
+                        "timestamp": timestamp_sec,
+                    })
             _write_progress(db, analysis_id, 90, 0)
         else:
             for frame_idx in range(0, total_frames, frame_interval):
@@ -187,7 +274,26 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
                 h, w = frame.shape[:2]
                 frame_small = cv2.resize(frame, (640, int(h * 640 / w))) if w > 640 else frame
 
-                results = model(frame_small, verbose=False, conf=settings.CONFIDENCE_THRESHOLD)
+                try:
+                    results = model.track(
+                        frame_small,
+                        persist=True,
+                        verbose=False,
+                        conf=settings.CONFIDENCE_THRESHOLD,
+                        iou=0.45,
+                        agnostic_nms=False,
+                        max_det=300,
+                        tracker="bytetrack.yaml",
+                    )
+                except Exception:
+                    results = model(
+                        frame_small,
+                        verbose=False,
+                        conf=settings.CONFIDENCE_THRESHOLD,
+                        iou=0.45,
+                        agnostic_nms=False,
+                        max_det=300,
+                    )
 
                 for result in results:
                     if result.boxes is None or len(result.boxes) == 0:
@@ -199,6 +305,38 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
                         )
                         if dtype not in best_frames or event["confidence"] > best_frames[dtype][1]:
                             best_frames[dtype] = (frame.copy(), event["confidence"], frame_idx, timestamp_sec)
+
+                fire_ratio, smoke_ratio = _detect_fire_smoke(frame_small)
+                if fire_ratio > 0.007 or smoke_ratio > 0.02:
+                    event_accumulator.setdefault("fire", []).append({
+                        "type": "fire",
+                        "confidence": min(0.95, 0.35 + max(fire_ratio, smoke_ratio) * 2.5),
+                        "area_ratio": max(fire_ratio, smoke_ratio),
+                        "count": 1,
+                        "frame_idx": frame_idx,
+                        "timestamp": timestamp_sec,
+                    })
+
+                water_ratio = _detect_flood_water(frame_small)
+                if water_ratio > 0.035:
+                    event_accumulator.setdefault("flood", []).append({
+                        "type": "flood",
+                        "confidence": min(0.92, 0.30 + water_ratio * 2.0),
+                        "area_ratio": water_ratio,
+                        "count": 1,
+                        "frame_idx": frame_idx,
+                        "timestamp": timestamp_sec,
+                    })
+
+                if _detect_structural_damage(frame_small):
+                    event_accumulator.setdefault("structural", []).append({
+                        "type": "structural",
+                        "confidence": 0.54,
+                        "area_ratio": 0.12,
+                        "count": 1,
+                        "frame_idx": frame_idx,
+                        "timestamp": timestamp_sec,
+                    })
 
                 if total_frames > 0:
                     pct = min(90, int((frame_idx / total_frames) * 100))

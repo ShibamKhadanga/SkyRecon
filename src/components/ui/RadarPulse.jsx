@@ -32,7 +32,7 @@ export default function RadarPulse({ size = 200, className = '' }) {
       {/* Scanning sweep */}
       <motion.div
         className="absolute inset-0"
-        style={{ transformOrigin: 'center center' }}
+        style={{ transformOrigin: 'center center', willChange: 'transform' }}
         animate={{ rotate: 360 }}
         transition={{ duration: 4, repeat: Infinity, ease: 'linear' }}
       >

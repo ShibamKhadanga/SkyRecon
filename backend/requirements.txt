@@ -1,26 +1,29 @@
-# ── Web Framework ─────────────────────────────────────────────
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-httpx==0.27.2                  # Async HTTP client — used for OpenSky & Celestrak proxy endpoints
-python-multipart==0.0.12       # Multipart form / file upload parsing
-aiofiles==24.1.0               # Async file I/O
-jinja2==3.1.4                  # Template engine (report HTML templates)
+# ── Web Framework ──────────────────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.12
+aiofiles>=24.1.0
 
-# ── Database ──────────────────────────────────────────────────
-sqlalchemy==2.0.35
-psycopg2-binary==2.9.10        # PostgreSQL driver
-pydantic==2.9.2
-pydantic-settings==2.5.2
+# ── Database ───────────────────────────────────────────────────────────────────
+sqlalchemy>=2.0.35
+psycopg2-binary>=2.9.10
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
 
-# ── Report Generation ─────────────────────────────────────────
-reportlab==4.2.4               # PDF generation
-python-docx==1.1.2             # DOCX generation
-openpyxl==3.1.5                # Excel export
-Pillow==11.0.0                 # Screenshot processing & image manipulation
+# ── AI / Computer Vision ───────────────────────────────────────────────────────
+ultralytics>=8.3.0              # YOLOv8 + ByteTrack (built-in tracker)
+opencv-python-headless>=4.10.0
+numpy>=1.26.0
+torch>=2.3.0
+torchvision>=0.18.0
+transformers>=4.40.0            # SegFormer-B2 for aerial segmentation
+Pillow>=10.0.0                  # Image processing (used by SegFormer + report screenshots)
 
-# ── AI / Computer Vision ──────────────────────────────────────
-ultralytics>=8.3.0             # YOLOv8s + ByteTrack object detection & tracking
-opencv-python-headless>=4.10.0 # Video frame extraction, CLAHE enhancement (no GUI)
-numpy>=1.26.0                  # Array & matrix operations
-torch>=2.3.0                   # PyTorch deep learning runtime
-torchvision>=0.18.0            # Vision transforms & model utilities
+# ── Report Generation ──────────────────────────────────────────────────────────
+reportlab>=4.2.0                # PDF generation
+python-docx>=1.1.0              # DOCX generation
+jinja2>=3.1.0
+
+# ── ONNX (installed automatically by ultralytics export, listed for reference) ─
+# onnx>=1.12.0
+# onnxruntime>=1.16.0

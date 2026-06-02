@@ -50,3 +50,6 @@ media/
 
 # OS
 Thumbs.db
+
+# Model weights (large binary files)
+*.pt
