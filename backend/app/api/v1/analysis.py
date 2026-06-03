@@ -435,7 +435,43 @@ def list_all_reports(skip: int = 0, limit: int = 100, db: Session = Depends(get_
     return result
 
 
-@router.get("/{analysis_id}", response_model=AnalysisResponse)
+@router.get("/category-stats")
+def get_category_stats(db: Session = Depends(get_db)):
+    """Returns aggregated detection counts per category across all completed analyses."""
+    rows = db.execute(
+        text("""
+            SELECT c.name, c.color, COUNT(d.id) as count
+            FROM detections d
+            JOIN categories c ON d.category_id = c.id
+            JOIN analyses a ON d.analysis_id = a.id
+            WHERE a.status = 'completed'
+            GROUP BY c.name, c.color
+            ORDER BY count DESC
+            LIMIT 8
+        """)
+    ).fetchall()
+    return [{"name": r.name, "color": r.color, "value": r.count} for r in rows]
+
+
+@router.get("/weekly-stats")
+def get_weekly_stats(db: Session = Depends(get_db)):
+    """Returns analyses and detections grouped by day of week for the chart."""
+    rows = db.execute(
+        text("""
+            SELECT
+                TO_CHAR(created_at, 'Dy') as day,
+                EXTRACT(DOW FROM created_at) as dow,
+                COUNT(*) as analyses,
+                COALESCE(SUM(total_objects), 0) as detections
+            FROM analyses
+            WHERE created_at >= NOW() - INTERVAL '7 days'
+            GROUP BY day, dow
+            ORDER BY dow
+        """)
+    ).fetchall()
+    return [{"name": r.day, "analyses": r.analyses, "detections": int(r.detections)} for r in rows]
+
+
 def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
     a = db.query(Analysis).filter(Analysis.id == analysis_id).first()
     if not a:

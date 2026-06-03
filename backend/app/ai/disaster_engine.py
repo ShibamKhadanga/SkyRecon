@@ -82,15 +82,20 @@ def _region_hsv_ratio(frame: np.ndarray, lower: list[int], upper: list[int]) -> 
 
 
 def _detect_fire_smoke(frame: np.ndarray) -> tuple[float, float]:
-    fire_ratio = _region_hsv_ratio(frame, [0, 120, 120], [30, 255, 255])
-    smoke_ratio = _region_hsv_ratio(frame, [0, 0, 120], [180, 60, 240])
+    # Tightened thresholds — previous values triggered on red rooftops, orange sand, sunset sky
+    # Now requires high saturation (>150) AND high brightness (>150) for fire
+    # Smoke requires very low saturation (<30) to exclude grey roads/concrete
+    fire_ratio  = _region_hsv_ratio(frame, [0, 150, 150], [20, 255, 255])
+    smoke_ratio = _region_hsv_ratio(frame, [0, 0, 180], [180, 30, 255])
     return fire_ratio, smoke_ratio
 
 
 def _detect_flood_water(frame: np.ndarray) -> float:
-    blue_ratio = _region_hsv_ratio(frame, [90, 30, 30], [140, 255, 255])
-    grey_ratio = _region_hsv_ratio(frame, [0, 0, 80], [180, 55, 200])
-    return max(blue_ratio, grey_ratio)
+    # Tightened — previous grey range [80-200] matched roads, concrete, shadows
+    # Now blue must have real saturation (>40) to distinguish from grey surfaces
+    blue_ratio = _region_hsv_ratio(frame, [90, 40, 40], [140, 255, 255])
+    # Removed grey_ratio entirely — grey roads/concrete caused too many false positives
+    return blue_ratio
 
 
 def _detect_structural_damage(frame: np.ndarray) -> bool:
@@ -230,7 +235,8 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
                             best_frames[dtype] = (frame.copy(), event["confidence"], frame_idx, timestamp_sec)
 
                 fire_ratio, smoke_ratio = _detect_fire_smoke(frame)
-                if fire_ratio > 0.007 or smoke_ratio > 0.02:
+                # Raised thresholds for image mode — no temporal averaging available
+                if fire_ratio > 0.025 or smoke_ratio > 0.05:
                     event_accumulator.setdefault("fire", []).append({
                         "type": "fire",
                         "confidence": min(0.95, 0.35 + max(fire_ratio, smoke_ratio) * 2.5),
@@ -241,7 +247,8 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
                     })
 
                 water_ratio = _detect_flood_water(frame)
-                if water_ratio > 0.035:
+                # Raised threshold for image mode
+                if water_ratio > 0.08:
                     event_accumulator.setdefault("flood", []).append({
                         "type": "flood",
                         "confidence": min(0.92, 0.30 + water_ratio * 2.0),
@@ -307,7 +314,8 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
                             best_frames[dtype] = (frame.copy(), event["confidence"], frame_idx, timestamp_sec)
 
                 fire_ratio, smoke_ratio = _detect_fire_smoke(frame_small)
-                if fire_ratio > 0.007 or smoke_ratio > 0.02:
+                # Video mode: lower threshold ok since MIN_OCCURRENCES filters noise
+                if fire_ratio > 0.015 or smoke_ratio > 0.04:
                     event_accumulator.setdefault("fire", []).append({
                         "type": "fire",
                         "confidence": min(0.95, 0.35 + max(fire_ratio, smoke_ratio) * 2.5),
@@ -318,7 +326,7 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
                     })
 
                 water_ratio = _detect_flood_water(frame_small)
-                if water_ratio > 0.035:
+                if water_ratio > 0.06:
                     event_accumulator.setdefault("flood", []).append({
                         "type": "flood",
                         "confidence": min(0.92, 0.30 + water_ratio * 2.0),
@@ -348,8 +356,9 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
             cap.release()
 
         # ── Persist confirmed events ──
-        # Require MIN_OCCURRENCES frames to confirm a real disaster event
-        min_occurrences = 1 if is_image else MIN_OCCURRENCES
+        # For video: require MIN_OCCURRENCES frames (prevents single-frame false positives)
+        # For image: require stronger signal — raise thresholds instead of count
+        min_occurrences = MIN_OCCURRENCES if not is_image else 2
         total_events = 0
 
         for dtype, occurrences in event_accumulator.items():

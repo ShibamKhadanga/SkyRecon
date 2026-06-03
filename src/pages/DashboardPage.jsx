@@ -67,13 +67,12 @@ export default function DashboardPage() {
   const fetchAll = async () => {
     setLoading(true)
     try {
-      // All fetches in parallel — no sequential waterfalls
-      const [health, statsRes, analysesRes, allRes, catRes] = await Promise.allSettled([
+      const [health, statsRes, analysesRes, catStatsRes, weeklyRes] = await Promise.allSettled([
         fetch('/api/health'),
         fetch('/api/v1/dashboard/stats'),
         fetch('/api/v1/dashboard/recent-analyses'),
-        fetch('/api/v1/analysis/?limit=50'),
-        fetch('/api/v1/categories/'),
+        fetch('/api/v1/analysis/category-stats'),
+        fetch('/api/v1/analysis/weekly-stats'),
       ])
 
       const online = health.status === 'fulfilled' && health.value?.ok
@@ -100,38 +99,30 @@ export default function DashboardPage() {
         }
       }
 
-      if (allRes.status === 'fulfilled' && allRes.value.ok) {
-        const allData = await allRes.value.json()
-        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-        const dayMap = {}
-        days.forEach(d => { dayMap[d] = { name: d, analyses: 0, detections: 0 } })
-        allData.forEach(a => {
-          if (!a.created_at) return
-          const day = days[new Date(a.created_at).getDay()]
-          dayMap[day].analyses += 1
-          dayMap[day].detections += a.total_objects || 0
-        })
-        const todayIdx = new Date().getDay()
-        const ordered = [...days.slice(todayIdx + 1), ...days.slice(0, todayIdx + 1)]
-        setAreaData(ordered.map(d => dayMap[d]))
+      // ── Category breakdown from dedicated endpoint ──
+      if (catStatsRes.status === 'fulfilled' && catStatsRes.value.ok) {
+        const cats = await catStatsRes.value.json()
+        if (Array.isArray(cats) && cats.length > 0) {
+          setCategoryData(cats.map(c => ({
+            name: c.name,
+            value: c.value,
+            color: c.color || CATEGORY_COLORS[c.name] || CATEGORY_COLORS.default
+          })))
+        }
+      }
 
-        // Category breakdown — use dashboard/stats endpoint instead of N+1 summary calls
-        const catCounts = {}
-        allData.forEach(a => {
-          if (a.status !== 'completed' || !a.category_breakdown) return
-          Object.entries(a.category_breakdown).forEach(([cat, count]) => {
-            catCounts[cat] = (catCounts[cat] || 0) + count
-          })
-        })
-        if (Object.keys(catCounts).length > 0) {
-          setCategoryData(
-            Object.entries(catCounts)
-              .sort((a, b) => b[1] - a[1]).slice(0, 6)
-              .map(([name, value]) => ({ name, value, color: CATEGORY_COLORS[name] || CATEGORY_COLORS.default }))
-          )
-        } else if (catRes.status === 'fulfilled' && catRes.value.ok) {
-          const cats = await catRes.value.json()
-          setCategoryData(cats.slice(0, 6).map(c => ({ name: c.name, value: 0, color: c.color || CATEGORY_COLORS.default })))
+      // ── Weekly chart from dedicated endpoint ──
+      if (weeklyRes.status === 'fulfilled' && weeklyRes.value.ok) {
+        const weekly = await weeklyRes.value.json()
+        if (Array.isArray(weekly) && weekly.length > 0) {
+          // Fill in missing days with zeros
+          const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+          const dayMap = {}
+          days.forEach(d => { dayMap[d] = { name: d, analyses: 0, detections: 0 } })
+          weekly.forEach(w => { dayMap[w.name] = w })
+          const todayIdx = new Date().getDay()
+          const ordered = [...days.slice(todayIdx + 1), ...days.slice(0, todayIdx + 1)]
+          setAreaData(ordered.map(d => dayMap[d]))
         }
       }
 

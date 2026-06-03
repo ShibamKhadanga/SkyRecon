@@ -1040,16 +1040,28 @@ def run_mapping_analysis(
                         continue
 
                     # ── Unique object key ──
+                    # Primary key: ByteTrack track_id (persistent across frames)
+                    # Secondary key: spatial grid (catches track_id resets on slow CPU)
+                    # A person is considered the same if track_id matches OR
+                    # if they appear within 40px of a previously seen person.
+                    spatial_key = (
+                        round(x1o / 40), round(y1o / 40),
+                        round(x2o / 40), round(y2o / 40), cls_id
+                    )
                     if track_id is not None:
                         obj_key = (track_id, cls_id)
                     else:
-                        obj_key = (round(x1o/20), round(y1o/20),
-                                   round(x2o/20), round(y2o/20), cls_id)
+                        obj_key = spatial_key
+
+                    # Spatial dedup: even if track_id changed, skip if same position seen before
+                    if spatial_key in seen_track_ids and obj_key not in seen_track_ids:
+                        continue
 
                     is_first_appearance = obj_key not in seen_track_ids
 
                     if is_first_appearance:
                         seen_track_ids[obj_key] = timestamp_sec
+                        seen_track_ids[spatial_key] = timestamp_sec  # spatial dedup index
 
                         # ── Fix 2: Save one screenshot per NEW unique object ──
                         # Crop tightly around the detected object with padding,
