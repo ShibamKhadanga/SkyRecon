@@ -3,6 +3,7 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 python-multipart>=0.0.12
 aiofiles>=24.1.0
+httpx>=0.27.0                   # Async HTTP client for SSE stream proxy
 
 # ── Database ───────────────────────────────────────────────────────────────────
 sqlalchemy>=2.0.35
@@ -16,8 +17,9 @@ opencv-python-headless>=4.10.0
 numpy>=1.26.0
 torch>=2.3.0
 torchvision>=0.18.0
-transformers>=4.40.0            # SegFormer-B2 for aerial segmentation
-Pillow>=10.0.0                  # Image processing (used by SegFormer + report screenshots)
+transformers>=4.40.0            # SegFormer-B2 (aerial segmentation) + CLIP (Object Finder)
+accelerate>=0.30.0              # Required for HuggingFace GPU inference (SegFormer)
+Pillow>=10.0.0                  # Image processing (SegFormer pipeline + report screenshots)
 
 # ── Report Generation ──────────────────────────────────────────────────────────
 reportlab>=4.2.0                # PDF generation

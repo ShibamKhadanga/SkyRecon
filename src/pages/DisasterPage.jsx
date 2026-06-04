@@ -4,7 +4,7 @@ import {
   AlertTriangle, Upload, ArrowRight, Play, Cpu, 
   FileDown, ShieldAlert, Clock, Image, Flame, CheckCircle,
   Volume2, VolumeX, Radio, Wifi, WifiOff, Shield, HeartHandshake, HelpCircle,
-  BarChart2
+  BarChart2, StopCircle
 } from 'lucide-react'
 import FileDropzone from '../components/ui/FileDropzone'
 import GlassCard from '../components/ui/GlassCard'
@@ -204,6 +204,19 @@ export default function DisasterPage() {
     return acc
   }, { rescueTeams: 0, ambulances: 0, rescueBoats: 0, emergencyVehicles: 0, supportStaff: 0 })
 
+  const handleCancelScan = async () => {
+    if (!analysisId) return
+    try {
+      await fetch(`/api/v1/analysis/${analysisId}/cancel`, { method: 'POST' })
+      if (pollRef.current) clearInterval(pollRef.current)
+      localStorage.removeItem('skyrecon_disaster_job')
+      setScanning(false)
+      setScanProgress(0)
+    } catch (e) {
+      console.warn('Cancel failed:', e)
+    }
+  }
+
   const handleExport = async (format) => {
     if (!analysisId) return
     try {
@@ -335,15 +348,25 @@ export default function DisasterPage() {
             </div>
             
             <div className="pt-6 border-t border-white/5 mt-8">
-              <NeonButton 
-                variant="danger" 
-                className="w-full justify-center"
-                icon={Play}
-                onClick={handleStartScan}
-                disabled={!file || scanning}
-              >
-                {scanning ? 'Scanning...' : 'Start Disaster Scan'}
-              </NeonButton>
+              <div className="flex gap-3">
+                <NeonButton 
+                  variant="danger" 
+                  className="flex-1 justify-center"
+                  icon={Play}
+                  onClick={handleStartScan}
+                  disabled={!file || scanning}
+                >
+                  {scanning ? 'Scanning...' : 'Start Disaster Scan'}
+                </NeonButton>
+                {scanning && (
+                  <button
+                    onClick={handleCancelScan}
+                    className="flex items-center gap-2 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold hover:bg-red-500/20 transition-colors uppercase tracking-widest"
+                  >
+                    <StopCircle size={14} /> Cancel
+                  </button>
+                )}
+              </div>
             </div>
           </GlassCard>
         </div>

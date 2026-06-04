@@ -680,12 +680,15 @@ def _detect_heuristic(
 
     # ── Now process all heuristic detections into batch ───────────────────────
     for (x1, y1, x2, y2, label, conf) in detections:
-        # Grid-based dedup key (25px grid) to avoid counting the same object across adjacent frames,
-        # while still allowing distinct nearby trees or houses to be counted separately.
-        obj_key = (round(x1 / 25), round(y1 / 25), round(x2 / 25), round(y2 / 25), label)
-        if obj_key in seen_track_ids:
+        # Centre-point spatial key on 25px grid
+        spatial_key = (
+            round((x1 + x2) / 2 / 25),
+            round((y1 + y2) / 2 / 25),
+            label
+        )
+        if spatial_key in seen_track_ids:
             continue
-        seen_track_ids[obj_key] = timestamp_sec
+        seen_track_ids[spatial_key] = timestamp_sec
 
         # Save screenshot
         try:
@@ -698,7 +701,7 @@ def _detect_heuristic(
                         (x1 - cx1, max(y1 - cy1 - 6, 10)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (57, 255, 20), 2)
             shot_path = _save_screenshot(crop, f"map_{analysis_id}", timestamp_sec)
-            obj_screenshots[obj_key] = shot_path
+            obj_screenshots[spatial_key] = shot_path
         except Exception:
             shot_path = None
 
@@ -712,7 +715,7 @@ def _detect_heuristic(
             "frame_number": frame_idx,
             "timestamp": timestamp_sec,
             "characteristics": chars_str,
-            "screenshot_path": obj_screenshots.get(obj_key),
+            "screenshot_path": obj_screenshots.get(spatial_key),
         })
 
 # ── Aerial misclassification correction ───────────────────────────────────────
@@ -902,9 +905,12 @@ def run_mapping_analysis(
             logger.info(f"[AI] {total_frames} frames @ {fps:.1f}fps, interval={frame_interval}, seek={_supports_seek}")
 
         # ── Tracking state ──
-        seen_track_ids: dict[tuple, float] = {}
-        # screenshot_paths: maps obj_key → screenshot path (one per unique object)
-        obj_screenshots: dict[tuple, str] = {}
+        # confirmed_ids: set of unique object keys actually counted
+        # spatial_index: maps spatial_key -> track_key, for dedup when track_id resets
+        confirmed_ids: set  = set()
+        spatial_index: dict = {}   # spatial_key -> obj_key
+        obj_screenshots: dict = {}
+        first_seen_at: dict  = {}  # obj_key -> timestamp_sec
 
         batch: list[dict] = []
         BATCH_SIZE = 50
@@ -961,7 +967,6 @@ def run_mapping_analysis(
             if cat_key in HEURISTIC_CATEGORIES:
                 cat_id = cat_cache.get(target_cat)
                 if cat_id is None:
-                    # Try case-insensitive lookup
                     cat_id = next(
                         (v for k, v in cat_cache.items() if k.lower() == cat_key), None
                     )
@@ -969,7 +974,7 @@ def run_mapping_analysis(
                     _detect_heuristic(
                         enhanced, target_cat, frame_idx, timestamp_sec,
                         analysis_id, cat_id, chars_str,
-                        seen_track_ids, obj_screenshots, batch, settings
+                        confirmed_ids, obj_screenshots, batch, settings
                     )
                 return  # heuristic-only, skip YOLO for this category
 
@@ -1039,29 +1044,31 @@ def run_mapping_analysis(
                     if not _matches_characteristics(target_cat, characteristics, cls_name, crop):
                         continue
 
-                    # ── Unique object key ──
-                    # Primary key: ByteTrack track_id (persistent across frames)
-                    # Secondary key: spatial grid (catches track_id resets on slow CPU)
-                    # A person is considered the same if track_id matches OR
-                    # if they appear within 40px of a previously seen person.
+                    # ── Unique object dedup ──
+                    # Build spatial key on a 50px grid (tighter than before)
                     spatial_key = (
-                        round(x1o / 40), round(y1o / 40),
-                        round(x2o / 40), round(y2o / 40), cls_id
+                        round((x1o + x2o) / 2 / 50),  # centre-x bucket
+                        round((y1o + y2o) / 2 / 50),  # centre-y bucket
+                        cls_id
                     )
+
                     if track_id is not None:
                         obj_key = (track_id, cls_id)
                     else:
                         obj_key = spatial_key
 
-                    # Spatial dedup: even if track_id changed, skip if same position seen before
-                    if spatial_key in seen_track_ids and obj_key not in seen_track_ids:
-                        continue
+                    # If spatial position was already registered to a different obj_key, skip
+                    if spatial_key in spatial_index:
+                        existing = spatial_index[spatial_key]
+                        if existing != obj_key and existing in confirmed_ids:
+                            continue
 
-                    is_first_appearance = obj_key not in seen_track_ids
+                    is_first_appearance = obj_key not in confirmed_ids
 
                     if is_first_appearance:
-                        seen_track_ids[obj_key] = timestamp_sec
-                        seen_track_ids[spatial_key] = timestamp_sec  # spatial dedup index
+                        confirmed_ids.add(obj_key)
+                        spatial_index[spatial_key] = obj_key
+                        first_seen_at[obj_key] = timestamp_sec
 
                         # ── Fix 2: Save one screenshot per NEW unique object ──
                         # Crop tightly around the detected object with padding,
@@ -1133,23 +1140,31 @@ def run_mapping_analysis(
                 if not ret:
                     break
 
+                # Check if cancelled by user
+                from ..api.v1.analysis import is_cancelled
+                if is_cancelled(analysis_id):
+                    logger.info(f"[AI] Analysis {analysis_id} cancelled by user at frame {frame_idx}")
+                    cap.release()
+                    flush_batch()
+                    return {"analysis_id": analysis_id, "cancelled": True}
+
                 process_frame(frame, frame_idx, frame_idx / fps)
 
                 if total_frames > 0:
                     pct = min(99, int((frame_idx / total_frames) * 100))
                     if pct >= last_progress + 5:
                         flush_batch()
-                        _write_progress(db, analysis_id, pct, len(seen_track_ids))
+                        _write_progress(db, analysis_id, pct, len(confirmed_ids))
                         last_progress = pct
                         logger.info(
-                            f"[AI] {pct}% | {len(seen_track_ids)} unique objects tracked"
+                            f"[AI] {pct}% | {len(confirmed_ids)} unique objects tracked"
                         )
 
             cap.release()
             flush_batch()
 
         processing_time = time.time() - start_time
-        unique_count = len(seen_track_ids)
+        unique_count = len(confirmed_ids)
 
         db.execute(
             text("SELECT complete_analysis(:id, :total, :time)"),

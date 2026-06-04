@@ -3,7 +3,8 @@ import { NavLink, useLocation, Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, Scan, FileText, Map, Settings,
-  AlertTriangle, ChevronLeft, ChevronRight, Crosshair
+  AlertTriangle, ChevronLeft, ChevronRight, Crosshair,
+  Video, SearchCheck, Circle
 } from 'lucide-react'
 
 const navSections = [
@@ -21,10 +22,18 @@ const navSections = [
     ],
   },
   {
+    title: 'Drone Intelligence',
+    items: [
+      { path: '/live', icon: Video, label: 'Live Feed' },
+      { path: '/find', icon: SearchCheck, label: 'Find Object' },
+    ],
+  },
+  {
     title: 'Analytics & Tools',
     items: [
-      { path: '/map', icon: Map, label: 'GIS Map View' },
-      { path: '/reports', icon: FileText, label: 'All Reports' },
+      { path: '/map',        icon: Map,    label: 'GIS Map View'  },
+      { path: '/reports',    icon: FileText, label: 'All Reports'  },
+      { path: '/recordings', icon: Circle,   label: 'Recordings'   },
     ],
   },
 ]

@@ -642,6 +642,12 @@ body {
   filter: brightness(0.6) contrast(1.2) saturate(0.3) hue-rotate(90deg);
 }
 
+/* Weather overlay pane — Leaflet names it leaflet-{paneName}-pane */
+.leaflet-weatherPane-pane {
+  filter: none !important;
+  z-index: 450 !important;
+}
+
 .leaflet-control-zoom a {
   background: var(--glass-bg) !important;
   backdrop-filter: blur(10px);

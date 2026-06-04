@@ -1,7 +1,7 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { MapPin, Layers, Navigation, Search, Crosshair, X, AlertTriangle, Zap, Trees, Car, Building2, Flame } from 'lucide-react'
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet'
+import { MapPin, Navigation, Search, Crosshair, X, AlertTriangle, Zap, Trees, Car, Building2, CloudRain, Wind, Thermometer, Gauge } from 'lucide-react'
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap, Pane } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import GlassCard from '../components/ui/GlassCard'
@@ -128,13 +128,61 @@ export default function MapPage() {
   const [markers, setMarkers] = useState([])
   const [usingRealData, setUsingRealData] = useState(false)
   const [weather, setWeather] = useState(null)
-  const [weatherGrid, setWeatherGrid] = useState([]) // grid of points for map overlays
-  const [activeOverlay, setActiveOverlay] = useState(null) // 'temp' | 'pressure' | 'wind' | null
+  const [activeOverlay, setActiveOverlay] = useState(null)
+  const [radarPath, setRadarPath] = useState(null)
+  const [weatherGrid, setWeatherGrid] = useState([])
+  const [overlayLoading, setOverlayLoading] = useState(false)
   const [aircraft, setAircraft] = useState([])
   const [satellites, setSatellites] = useState([])
   const [showAircraft, setShowAircraft] = useState(false)
   const [showSatellites, setShowSatellites] = useState(false)
   const [trafficLoading, setTrafficLoading] = useState(false)
+
+  const OVERLAY_CFG = {
+    precipitation: { label: 'Precipitation', icon: CloudRain,   color: 'text-blue-400',   owm: null           },
+    temp:          { label: 'Temperature',   icon: Thermometer, color: 'text-orange-400', owm: 'temp_new'     },
+    wind:          { label: 'Wind Speed',    icon: Wind,        color: 'text-cyan-400',   owm: 'wind_new'     },
+    pressure:      { label: 'Pressure',      icon: Gauge,       color: 'text-purple-400', owm: 'pressure_new' },
+  }
+  const OWM_KEY = '6a3f788476691adff7fd0000a9ff2c30'
+
+  // RainViewer — free, no key, live global precipitation radar
+  const fetchRadarPath = async () => {
+    try {
+      const d = await (await fetch('https://api.rainviewer.com/public/weather-maps.json')).json()
+      const past = d?.radar?.past
+      if (past?.length) setRadarPath(`${d.host}${past[past.length - 1].path}`)
+    } catch {}
+  }
+
+  // Open-Meteo grid — free, no key, temp/wind/pressure globally
+  const fetchWeatherGrid = async () => {
+    setOverlayLoading(true)
+    try {
+      const lats = [], lons = []
+      for (let la = -75; la <= 75; la += 15)
+        for (let lo = -170; lo <= 170; lo += 20)
+          { lats.push(la); lons.push(lo) }
+      const arr = await (await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}&longitude=${lons.join(',')}&current=temperature_2m,surface_pressure,wind_speed_10m&wind_speed_unit=kmh&timezone=auto`
+      )).json()
+      const results = Array.isArray(arr) ? arr : [arr]
+      setWeatherGrid(results.map((item, i) => ({
+        lat: lats[i], lon: lons[i],
+        temp:     Math.round(item.current?.temperature_2m   ?? 0),
+        pressure: Math.round(item.current?.surface_pressure ?? 1013),
+        wind:     Math.round(item.current?.wind_speed_10m   ?? 0),
+      })))
+    } catch {}
+    setOverlayLoading(false)
+  }
+
+  const handleOverlayToggle = (key) => {
+    const next = activeOverlay === key ? null : key
+    setActiveOverlay(next)
+    if (!next) return
+    if (key === 'precipitation' && !radarPath) fetchRadarPath()
+  }
 
   // Auto-detect user location on mount + fetch weather
   useEffect(() => {
@@ -147,7 +195,7 @@ export default function MapPage() {
           setCenter(latlng)
           setZoom(12)
           setLocating(false)
-          // Fetch real-time weather from Open-Meteo (free, no API key)
+          // Fetch local weather card data from Open-Meteo (free, no API key)
           fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latlng[0]}&longitude=${latlng[1]}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code,apparent_temperature&wind_speed_unit=kmh&timezone=auto`)
             .then(r => r.json())
             .then(d => {
@@ -171,30 +219,6 @@ export default function MapPage() {
                 label,
                 icon,
               })
-              // Fetch a 4x4 grid of points around user for map overlay
-              const offsets = [-1.5, -0.5, 0.5, 1.5]
-              const gridPoints = []
-              for (const dlat of offsets) {
-                for (const dlon of offsets) {
-                  gridPoints.push({ lat: latlng[0] + dlat, lon: latlng[1] + dlon })
-                }
-              }
-              const latList = gridPoints.map(p => p.lat).join(',')
-              const lonList = gridPoints.map(p => p.lon).join(',')
-              fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latList}&longitude=${lonList}&current=temperature_2m,surface_pressure,wind_speed_10m&wind_speed_unit=kmh&timezone=auto`)
-                .then(r => r.json())
-                .then(arr => {
-                  const results = Array.isArray(arr) ? arr : [arr]
-                  const grid = results.map((item, i) => ({
-                    lat: gridPoints[i]?.lat,
-                    lon: gridPoints[i]?.lon,
-                    temp: Math.round(item.current?.temperature_2m ?? 0),
-                    pressure: Math.round(item.current?.surface_pressure ?? 1013),
-                    wind: Math.round(item.current?.wind_speed_10m ?? 0),
-                  }))
-                  setWeatherGrid(grid)
-                })
-                .catch(() => {})
             })
             .catch(() => {})
         },
@@ -446,39 +470,27 @@ export default function MapPage() {
                 </Popup>
               </Marker>
             ))}
-            {activeOverlay && weatherGrid.map((pt, i) => {
-              if (!pt.lat || !pt.lon) return null
-              let color = '#06b6d4'
-              let value = ''
-              if (activeOverlay === 'temp') {
-                const t = pt.temp
-                color = t > 35 ? '#ef4444' : t > 28 ? '#f97316' : t > 20 ? '#eab308' : t > 10 ? '#22c55e' : '#60a5fa'
-                value = `${t}°C`
-              } else if (activeOverlay === 'pressure') {
-                const p = pt.pressure
-                color = p < 1005 ? '#3b82f6' : p < 1013 ? '#06b6d4' : p < 1020 ? '#22c55e' : '#f97316'
-                value = `${p} hPa`
-              } else if (activeOverlay === 'wind') {
-                const w = pt.wind
-                color = w > 40 ? '#ef4444' : w > 25 ? '#f97316' : w > 15 ? '#eab308' : '#22c55e'
-                value = `${w} km/h`
-              }
-              return (
-                <Circle
-                  key={`wx-${i}`}
-                  center={[pt.lat, pt.lon]}
-                  radius={80000}
-                  pathOptions={{ fillColor: color, fillOpacity: 0.18, stroke: true, color, weight: 1, opacity: 0.35 }}
-                >
-                  <Popup>
-                    <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
-                      <b>{activeOverlay.toUpperCase()}</b>: {value}<br />
-                      {pt.lat.toFixed(2)}°N {pt.lon.toFixed(2)}°E
-                    </div>
-                  </Popup>
-                </Circle>
-              )
-            })}
+            {/* Weather overlay — single pane to avoid duplicate pane name errors */}
+            <Pane name="weatherPane" style={{ zIndex: 450 }}>
+              {activeOverlay === 'precipitation' && radarPath && (
+                <TileLayer
+                  key={radarPath}
+                  url={`${radarPath}/256/{z}/{x}/{y}/2/1_1.png`}
+                  attribution="Radar &copy; RainViewer"
+                  opacity={0.85}
+                  pane="weatherPane"
+                />
+              )}
+              {activeOverlay && OVERLAY_CFG[activeOverlay]?.owm && (
+                <TileLayer
+                  key={activeOverlay}
+                  url={`https://tile.openweathermap.org/map/${OVERLAY_CFG[activeOverlay].owm}/{z}/{x}/{y}.png?appid=${OWM_KEY}`}
+                  attribution="Weather &copy; OpenWeatherMap"
+                  opacity={0.85}
+                  pane="weatherPane"
+                />
+              )}
+            </Pane>
           </MapContainer>
 
           {/* Map overlay stats */}
@@ -498,63 +510,64 @@ export default function MapPage() {
         <div className="space-y-3 overflow-y-auto pr-1" style={{ maxHeight: 'calc(100vh - 210px)' }}>
 
           {/* Weather Card */}
-          {weather && (
-            <GlassCard hover={false} className="p-3 border-cyan-500/10">
-              <p className="text-[9px] font-mono text-cyan-400 uppercase tracking-widest mb-2">Live Weather · Your Location</p>
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-2xl">{weather.icon}</span>
-                  <div>
-                    <p className="text-lg font-bold text-white">{weather.temp}°C</p>
-                    <p className="text-[10px] text-[var(--text-muted)]">{weather.label}</p>
+          <GlassCard hover={false} className="p-3 border-cyan-500/10">
+            <p className="text-[9px] font-mono text-cyan-400 uppercase tracking-widest mb-2">Live Weather · Your Location</p>
+            {weather ? (
+              <>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl">{weather.icon}</span>
+                    <div>
+                      <p className="text-lg font-bold text-white">{weather.temp}°C</p>
+                      <p className="text-[10px] text-[var(--text-muted)]">{weather.label}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] text-[var(--text-muted)] font-mono">Feels {weather.feels}°C</p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-[10px] text-[var(--text-muted)] font-mono">Feels {weather.feels}°C</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <div className="bg-white/[0.02] rounded-lg p-2 text-center">
+                    <p className="text-xs font-bold text-cyan-400">{weather.humidity}%</p>
+                    <p className="text-[9px] text-[var(--text-muted)] font-mono">Humidity</p>
+                  </div>
+                  <div className="bg-white/[0.02] rounded-lg p-2 text-center">
+                    <p className="text-xs font-bold text-cyan-400">{weather.wind} km/h</p>
+                    <p className="text-[9px] text-[var(--text-muted)] font-mono">Wind</p>
+                  </div>
                 </div>
+                <p className="text-[8px] text-[var(--text-muted)] font-mono mt-2 text-center">Open-Meteo · No API key · Live data</p>
+              </>
+            ) : (
+              <p className="text-[10px] text-[var(--text-muted)] font-mono">Enable location for local weather</p>
+            )}
+            <div className="mt-3 pt-2 border-t border-white/5">
+              <p className="text-[9px] font-mono text-[var(--text-muted)] mb-1.5">LIVE GLOBAL OVERLAY</p>
+              <div className="grid grid-cols-2 gap-1">
+                {Object.entries(OVERLAY_CFG).map(([key, cfg]) => {
+                  const Icon = cfg.icon
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => handleOverlayToggle(key)}
+                      className={`flex items-center gap-1 py-1.5 px-2 rounded-lg text-[9px] font-mono font-bold border transition-all cursor-pointer ${
+                        activeOverlay === key
+                          ? `${cfg.color} bg-white/10 border-white/20`
+                          : 'text-[var(--text-muted)] border-white/5 hover:border-white/10'
+                      }`}
+                    >
+                      <Icon size={9} /> {cfg.label}
+                    </button>
+                  )
+                })}
               </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                <div className="bg-white/[0.02] rounded-lg p-2 text-center">
-                  <p className="text-xs font-bold text-cyan-400">{weather.humidity}%</p>
-                  <p className="text-[9px] text-[var(--text-muted)] font-mono">Humidity</p>
-                </div>
-                <div className="bg-white/[0.02] rounded-lg p-2 text-center">
-                  <p className="text-xs font-bold text-cyan-400">{weather.wind} km/h</p>
-                  <p className="text-[9px] text-[var(--text-muted)] font-mono">Wind</p>
-                </div>
-              </div>
-              <p className="text-[8px] text-[var(--text-muted)] font-mono mt-2 text-center">Open-Meteo · No API key · Live data</p>
-              {weatherGrid.length > 0 && (
-                <div className="mt-3 pt-2 border-t border-white/5">
-                  <p className="text-[9px] font-mono text-[var(--text-muted)] mb-1.5">MAP OVERLAY</p>
-                  <div className="grid grid-cols-3 gap-1">
-                    {[
-                      { key: 'temp', label: 'Temp', color: 'text-orange-400' },
-                      { key: 'pressure', label: 'Pressure', color: 'text-blue-400' },
-                      { key: 'wind', label: 'Wind', color: 'text-green-400' },
-                    ].map(o => (
-                      <button
-                        key={o.key}
-                        onClick={() => setActiveOverlay(activeOverlay === o.key ? null : o.key)}
-                        className={`py-1 rounded-lg text-[9px] font-mono font-bold border transition-all cursor-pointer ${
-                          activeOverlay === o.key
-                            ? `${o.color} bg-white/10 border-white/20`
-                            : 'text-[var(--text-muted)] border-white/5 hover:border-white/10'
-                        }`}
-                      >
-                        {o.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="mt-1.5 flex gap-1 text-[8px] font-mono text-[var(--text-muted)] justify-between">
-                    {activeOverlay === 'temp' && <><span className="text-blue-400">■ Cold</span><span className="text-green-400">■ Mild</span><span className="text-orange-400">■ Hot</span><span className="text-red-400">■ Very Hot</span></>}
-                    {activeOverlay === 'pressure' && <><span className="text-blue-400">■ Low</span><span className="text-cyan-400">■ Normal</span><span className="text-orange-400">■ High</span></>}
-                    {activeOverlay === 'wind' && <><span className="text-green-400">■ Calm</span><span className="text-yellow-400">■ Moderate</span><span className="text-red-400">■ Strong</span></>}
-                  </div>
-                </div>
+              {activeOverlay && (
+                <p className="text-[8px] text-[var(--text-muted)] font-mono mt-1.5 text-center">
+                  {overlayLoading ? 'Loading...' : <>Live <span className="text-cyan-400">{OVERLAY_CFG[activeOverlay]?.label}</span> &middot; {activeOverlay === 'precipitation' ? 'RainViewer' : 'Open-Meteo'}</>}
+                </p>
               )}
-            </GlassCard>
-          )}
+            </div>
+          </GlassCard>
 
           {/* Air Traffic & Satellite Card */}
           <GlassCard hover={false} className="p-3 border-purple-500/10">

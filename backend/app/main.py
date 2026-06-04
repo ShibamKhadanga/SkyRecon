@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from .core.config import settings
 from .database import init_db
-from .api.v1 import categories, analysis, dashboard
+from .api.v1 import categories, analysis, dashboard, stream
 
 # Initialize FastAPI
 app = FastAPI(
@@ -27,6 +27,7 @@ app.add_middleware(
 app.include_router(categories.router, prefix="/api/v1")
 app.include_router(analysis.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
+app.include_router(stream.router,   prefix="/api/v1")
 
 # Serve uploaded videos, screenshots, and generated reports as static files
 app.mount("/uploads",     StaticFiles(directory=settings.UPLOAD_DIR),      name="uploads")

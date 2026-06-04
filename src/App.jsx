@@ -10,6 +10,9 @@ const DisasterPage = lazy(() => import('./pages/DisasterPage'))
 const ReportsPage = lazy(() => import('./pages/ReportsPage'))
 const MapPage = lazy(() => import('./pages/MapPage'))
 const AdminPage = lazy(() => import('./pages/AdminPage'))
+const LiveFeedPage = lazy(() => import('./pages/LiveFeedPage'))
+const FindPage = lazy(() => import('./pages/FindPage'))
+const RecordingsPage = lazy(() => import('./pages/RecordingsPage'))
 
 export default function App() {
   return (
@@ -27,6 +30,9 @@ export default function App() {
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/map" element={<MapPage />} />
           <Route path="/admin" element={<AdminPage />} />
+          <Route path="/live" element={<LiveFeedPage />} />
+          <Route path="/find" element={<FindPage />} />
+          <Route path="/recordings" element={<RecordingsPage />} />
         </Route>
       </Routes>
     </AnimatePresence>
