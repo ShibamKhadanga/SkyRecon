@@ -150,8 +150,9 @@ async def find_object(
     target_bytes = await target_image.read()
     target_pil   = PILImage.open(io.BytesIO(target_bytes)).convert("RGB")
     with torch.no_grad():
-        t_inputs = clip_proc(images=target_pil, return_tensors="pt").to(device)
-        target_feat = clip_model.get_image_features(**t_inputs)
+        t_inputs = clip_proc(images=target_pil, return_tensors="pt")
+        # Pass only pixel_values to get_image_features to avoid unexpected key errors
+        target_feat = clip_model.get_image_features(pixel_values=t_inputs["pixel_values"].to(device))
         target_feat = target_feat / target_feat.norm(dim=-1, keepdim=True)
 
     # ── Get video path ──
@@ -194,8 +195,8 @@ async def find_object(
 
                 # CLIP similarity
                 with torch.no_grad():
-                    f_inputs = clip_proc(images=frame_pil, return_tensors="pt").to(device)
-                    frame_feat = clip_model.get_image_features(**f_inputs)
+                    f_inputs = clip_proc(images=frame_pil, return_tensors="pt")
+                    frame_feat = clip_model.get_image_features(pixel_values=f_inputs["pixel_values"].to(device))
                     frame_feat = frame_feat / frame_feat.norm(dim=-1, keepdim=True)
                     similarity = float((target_feat @ frame_feat.T).squeeze())
 

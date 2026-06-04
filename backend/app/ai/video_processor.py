@@ -912,6 +912,9 @@ def run_mapping_analysis(
         obj_screenshots: dict = {}
         first_seen_at: dict  = {}  # obj_key -> timestamp_sec
 
+        # Heuristic dedup dict — separate from YOLO confirmed_ids
+        heuristic_seen: dict = {}
+
         batch: list[dict] = []
         BATCH_SIZE = 50
         raw_detection_count = 0
@@ -974,7 +977,7 @@ def run_mapping_analysis(
                     _detect_heuristic(
                         enhanced, target_cat, frame_idx, timestamp_sec,
                         analysis_id, cat_id, chars_str,
-                        confirmed_ids, obj_screenshots, batch, settings
+                        heuristic_seen, obj_screenshots, batch, settings
                     )
                 return  # heuristic-only, skip YOLO for this category
 
@@ -1130,7 +1133,7 @@ def run_mapping_analysis(
         if is_image:
             process_frame(frame, 0, 0.0)
             flush_batch()
-            _write_progress(db, analysis_id, 100, len(seen_track_ids))
+            _write_progress(db, analysis_id, 100, len(confirmed_ids))
         else:
             # Use seek-based iteration to skip decoding of unwanted frames
             sampled_indices = range(0, total_frames, frame_interval)

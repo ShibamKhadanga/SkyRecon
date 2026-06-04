@@ -189,6 +189,7 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
 
     try:
         model = _get_model(settings.YOLO_MODEL)
+        conf  = settings.CONFIDENCE_THRESHOLD if settings.CONFIDENCE_THRESHOLD < 0.5 else 0.30
 
         is_image = video_path.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp'))
 
@@ -371,14 +372,11 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
             best_timestamp = occurrences[0]["timestamp"]
             severity = _compute_severity(dtype, total_count, avg_confidence, avg_area)
 
-            # Save screenshot with timestamp burned in
+            # Save screenshot
             screenshot_path = None
             if dtype in best_frames:
                 bf, _, bf_idx, bf_ts = best_frames[dtype]
-                screenshot_path = _draw_and_save(
-                    bf, None, model.names,
-                    f"disaster_{analysis_id}_{dtype}", bf_ts
-                ) if False else _save_screenshot(bf, f"disaster_{analysis_id}_{dtype}", bf_ts)
+                screenshot_path = _save_screenshot(bf, f"disaster_{analysis_id}_{dtype}", bf_ts)
 
             recommendation = DISASTER_RECOMMENDATIONS.get(
                 dtype, "Assess situation and deploy appropriate response teams."

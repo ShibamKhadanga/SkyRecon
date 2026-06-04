@@ -36,22 +36,45 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
 
 @router.get("/recent-analyses")
 def get_recent_analyses(db: Session = Depends(get_db)):
-    """Returns the most recent analyses using get_recent_analyses() PL/pgSQL function."""
+    """Returns the 5 most recent analyses."""
     try:
+        # Try stored procedure first
         result = db.execute(text("SELECT * FROM get_recent_analyses(5)")).all()
+        if result:
+            return [
+                {
+                    "id": r.id,
+                    "project_name": r.project_name,
+                    "status": r.status,
+                    "total_objects": r.total_objects,
+                    "detection_mode": r.detection_mode,
+                    "created_at": r.created_at.isoformat() if r.created_at else None
+                }
+                for r in result
+            ]
+    except Exception:
+        pass
+    # Fallback: direct SQL query
+    try:
+        rows = db.execute(text("""
+            SELECT id, project_name, status, total_objects, detection_mode, created_at
+            FROM analyses
+            ORDER BY created_at DESC
+            LIMIT 5
+        """)).all()
         return [
             {
                 "id": r.id,
                 "project_name": r.project_name,
                 "status": r.status,
-                "total_objects": r.total_objects,
+                "total_objects": r.total_objects or 0,
                 "detection_mode": r.detection_mode,
                 "created_at": r.created_at.isoformat() if r.created_at else None
             }
-            for r in result
+            for r in rows
         ]
     except Exception as e:
-        print(f"⚠️ Error calling get_recent_analyses stored procedure: {e}")
+        print(f"⚠️ recent-analyses fallback failed: {e}")
         return []
 
 

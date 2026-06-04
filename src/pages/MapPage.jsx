@@ -130,13 +130,7 @@ export default function MapPage() {
   const [weather, setWeather] = useState(null)
   const [activeOverlay, setActiveOverlay] = useState(null)
   const [radarPath, setRadarPath] = useState(null)
-  const [weatherGrid, setWeatherGrid] = useState([])
   const [overlayLoading, setOverlayLoading] = useState(false)
-  const [aircraft, setAircraft] = useState([])
-  const [satellites, setSatellites] = useState([])
-  const [showAircraft, setShowAircraft] = useState(false)
-  const [showSatellites, setShowSatellites] = useState(false)
-  const [trafficLoading, setTrafficLoading] = useState(false)
 
   const OVERLAY_CFG = {
     precipitation: { label: 'Precipitation', icon: CloudRain,   color: 'text-blue-400',   owm: null           },
@@ -153,28 +147,6 @@ export default function MapPage() {
       const past = d?.radar?.past
       if (past?.length) setRadarPath(`${d.host}${past[past.length - 1].path}`)
     } catch {}
-  }
-
-  // Open-Meteo grid — free, no key, temp/wind/pressure globally
-  const fetchWeatherGrid = async () => {
-    setOverlayLoading(true)
-    try {
-      const lats = [], lons = []
-      for (let la = -75; la <= 75; la += 15)
-        for (let lo = -170; lo <= 170; lo += 20)
-          { lats.push(la); lons.push(lo) }
-      const arr = await (await fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}&longitude=${lons.join(',')}&current=temperature_2m,surface_pressure,wind_speed_10m&wind_speed_unit=kmh&timezone=auto`
-      )).json()
-      const results = Array.isArray(arr) ? arr : [arr]
-      setWeatherGrid(results.map((item, i) => ({
-        lat: lats[i], lon: lons[i],
-        temp:     Math.round(item.current?.temperature_2m   ?? 0),
-        pressure: Math.round(item.current?.surface_pressure ?? 1013),
-        wind:     Math.round(item.current?.wind_speed_10m   ?? 0),
-      })))
-    } catch {}
-    setOverlayLoading(false)
   }
 
   const handleOverlayToggle = (key) => {
@@ -274,37 +246,6 @@ export default function MapPage() {
       () => setLocating(false),
       { timeout: 8000 }
     )
-  }
-
-  const fetchAircraft = async () => {
-    const loc = userLocation || [20.5937, 78.9629]
-    setTrafficLoading(true)
-    try {
-      const res = await fetch(`/api/v1/dashboard/live-aircraft?lat=${loc[0]}&lon=${loc[1]}&radius=8`)
-      const data = await res.json()
-      setAircraft(data.aircraft || [])
-    } catch { setAircraft([]) }
-    setTrafficLoading(false)
-  }
-
-  const fetchSatellites = async () => {
-    setTrafficLoading(true)
-    try {
-      const res = await fetch('/api/v1/dashboard/live-satellites')
-      const data = await res.json()
-      setSatellites(data.satellites || [])
-    } catch { setSatellites([]) }
-    setTrafficLoading(false)
-  }
-
-  const handleToggleAircraft = () => {
-    if (!showAircraft && aircraft.length === 0) fetchAircraft()
-    setShowAircraft(v => !v)
-  }
-
-  const handleToggleSatellites = () => {
-    if (!showSatellites && satellites.length === 0) fetchSatellites()
-    setShowSatellites(v => !v)
   }
 
   const filteredMarkers = markers.filter((m) => {
@@ -428,48 +369,6 @@ export default function MapPage() {
               />
             ))}
 
-            {/* Aircraft markers */}
-            {showAircraft && aircraft.map((ac) => (
-              <Marker
-                key={ac.icao}
-                position={[ac.lat, ac.lon]}
-                icon={new L.DivIcon({
-                  html: `<div style="font-size:18px;transform:rotate(${ac.heading}deg);filter:drop-shadow(0 0 4px #06b6d4)" title="${ac.callsign}">✈️</div>`,
-                  className: '', iconSize: [20, 20], iconAnchor: [10, 10],
-                })}
-              >
-                <Popup>
-                  <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
-                    <b>✈️ {ac.callsign}</b><br />
-                    Country: {ac.country}<br />
-                    Alt: {ac.altitude}m &nbsp; Speed: {ac.speed} m/s<br />
-                    Heading: {ac.heading}°<br />
-                    {ac.on_ground ? '🟡 On Ground' : '🟢 Airborne'}
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
-
-            {/* Satellite markers */}
-            {showSatellites && satellites.map((sat, i) => (
-              <Marker
-                key={i}
-                position={[sat.lat, sat.lon]}
-                icon={new L.DivIcon({
-                  html: `<div style="font-size:16px;filter:drop-shadow(0 0 5px #a855f7)" title="${sat.name}">🛰️</div>`,
-                  className: '', iconSize: [18, 18], iconAnchor: [9, 9],
-                })}
-              >
-                <Popup>
-                  <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
-                    <b>🛰️ {sat.name}</b><br />
-                    Alt: ~{sat.altitude_km} km<br />
-                    Inclination: {sat.inclination}°<br />
-                    Period: {sat.period_min} min
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
             {/* Weather overlay — single pane to avoid duplicate pane name errors */}
             <Pane name="weatherPane" style={{ zIndex: 450 }}>
               {activeOverlay === 'precipitation' && radarPath && (
@@ -569,46 +468,23 @@ export default function MapPage() {
             </div>
           </GlassCard>
 
-          {/* Air Traffic & Satellite Card */}
-          <GlassCard hover={false} className="p-3 border-purple-500/10">
-            <p className="text-[9px] font-mono text-purple-400 uppercase tracking-widest mb-2">Live Traffic Layers</p>
+          {/* Map Stats Card */}
+          <GlassCard hover={false} className="p-3 border-green-500/10">
+            <p className="text-[9px] font-mono text-green-400 uppercase tracking-widest mb-3">Map Statistics</p>
             <div className="space-y-2">
-              <button
-                onClick={handleToggleAircraft}
-                disabled={trafficLoading}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl border text-xs font-mono font-semibold transition-all cursor-pointer disabled:opacity-50 ${
-                  showAircraft
-                    ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
-                    : 'bg-white/[0.02] border-white/5 text-[var(--text-muted)] hover:border-white/10'
-                }`}
-              >
-                <span>✈️ Air Traffic</span>
-                <span className="text-[9px]">
-                  {showAircraft ? `${aircraft.length} aircraft` : 'OFF'}
-                </span>
-              </button>
-              <button
-                onClick={handleToggleSatellites}
-                disabled={trafficLoading}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl border text-xs font-mono font-semibold transition-all cursor-pointer disabled:opacity-50 ${
-                  showSatellites
-                    ? 'bg-purple-500/10 border-purple-500/30 text-purple-400'
-                    : 'bg-white/[0.02] border-white/5 text-[var(--text-muted)] hover:border-white/10'
-                }`}
-              >
-                <span>🛰️ Satellites</span>
-                <span className="text-[9px]">
-                  {showSatellites ? `${satellites.length} tracked` : 'OFF'}
-                </span>
-              </button>
-              {trafficLoading && (
-                <p className="text-[9px] text-[var(--text-muted)] font-mono text-center animate-pulse">Fetching live data...</p>
-              )}
-              {showAircraft && aircraft.length === 0 && !trafficLoading && (
-                <p className="text-[9px] text-yellow-400/70 font-mono text-center">No aircraft in range (OpenSky may rate-limit anonymous requests)</p>
-              )}
+              {[
+                { label: 'Total Sites', value: markers.length, color: 'text-green-400' },
+                { label: 'Critical Alerts', value: markers.filter(m => m.severity >= 4).length, color: 'text-red-400' },
+                { label: 'Disaster Events', value: markers.filter(m => m.type === 'disaster').length, color: 'text-orange-400' },
+                { label: 'Visible (filtered)', value: filteredMarkers.length, color: 'text-cyan-400' },
+              ].map(s => (
+                <div key={s.label} className="flex items-center justify-between">
+                  <span className="text-[10px] text-[var(--text-muted)] font-mono">{s.label}</span>
+                  <span className={`text-xs font-bold font-mono ${s.color}`}>{s.value}</span>
+                </div>
+              ))}
             </div>
-            <p className="text-[8px] text-[var(--text-muted)] font-mono mt-2 text-center">OpenSky Network · Celestrak · Free APIs</p>
+            <p className="text-[8px] text-[var(--text-muted)] font-mono mt-3 text-center">Real drone analysis data only</p>
           </GlassCard>
 
           {/* Search */}

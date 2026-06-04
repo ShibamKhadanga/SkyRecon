@@ -87,6 +87,13 @@ export default function LiveFeedPage() {
           const duration = Date.now() - recordStartRef.current
           const ext  = mimeType.includes('mp4') ? 'mp4' : 'webm'
           const name = `SkyRecon_${new Date().toISOString().slice(0,19).replace(/[:T]/g, '-')}.${ext}`
+
+          // Auto-download to disk so the file is not lost when browser closes
+          const a = document.createElement('a')
+          a.href = url
+          a.download = name
+          a.click()
+
           saveRecording({
             id:       Date.now().toString(),
             name,
