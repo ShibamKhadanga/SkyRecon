@@ -1,6 +1,22 @@
 {
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "https://shibamkhadanga-skyrecon.hf.space/api/:path*"
+    },
+    {
+      "source": "/uploads/:path*",
+      "destination": "https://shibamkhadanga-skyrecon.hf.space/uploads/:path*"
+    },
+    {
+      "source": "/screenshots/:path*",
+      "destination": "https://shibamkhadanga-skyrecon.hf.space/screenshots/:path*"
+    },
+    {
+      "source": "/reports/:path*",
+      "destination": "https://shibamkhadanga-skyrecon.hf.space/reports/:path*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
