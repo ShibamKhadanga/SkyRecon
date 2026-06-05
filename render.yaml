@@ -1,0 +1,48 @@
+# render.yaml — Render.com infrastructure-as-code
+# Defines the SkyRecon backend web service
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: skyrecon-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: DEBUG
+        value: "false"
+      - key: DB_HOST
+        fromDatabase:
+          name: skyrecon-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: skyrecon-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: skyrecon-db
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: skyrecon-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: skyrecon-db
+          property: password
+      - key: YOLO_MODEL
+        value: yolov8n.pt          # Use nano on free tier (no GPU)
+      - key: CONFIDENCE_THRESHOLD
+        value: "0.35"
+      - key: ALLOWED_ORIGINS
+        value: https://skyrecon.vercel.app  # Replace with your Vercel URL
+
+databases:
+  - name: skyrecon-db
+    plan: free
+    databaseName: skyrecon
+    user: skyrecon_user

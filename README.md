@@ -5,8 +5,9 @@
 <h1 align="center">SkyRecon – AI Powered Drone Intelligence Platform</h1>
 
 <p align="center">
-  <b>Smart Aerial Mapping • Disaster Detection & Response • Real-Time Drone Analytics</b><br/>
-  <em>Built for NIT Rourkela Drone Internship 2026</em>
+  <b>Smart Aerial Mapping • Disaster Detection &amp; Response • Real-Time Drone Analytics</b><br/>
+  <em>Built for NIT Rourkela Drone Internship 2026</em><br/>
+  <em>By: <strong>S. Khadanga</strong></em>
 </p>
 
 <p align="center">
@@ -16,6 +17,8 @@
   <img src="https://img.shields.io/badge/Database-PostgreSQL-4169E1?style=flat-square&logo=postgresql" />
   <img src="https://img.shields.io/badge/Maps-Leaflet%20GIS-199900?style=flat-square&logo=leaflet" />
   <img src="https://img.shields.io/badge/Segmentation-SegFormer--B2-764ABC?style=flat-square" />
+  <img src="https://img.shields.io/badge/Mobile-PWA%20Ready-5A0FC8?style=flat-square&logo=pwa" />
+  <img src="https://img.shields.io/badge/Deploy-Render%20%7C%20Railway-46E3B7?style=flat-square" />
 </p>
 
 ---
@@ -184,7 +187,7 @@ SkyRecon/
 
 ---
 
-## Getting Started
+## Getting Started (Local)
 
 ### Prerequisites
 - Node.js >= 18
@@ -213,6 +216,39 @@ On first startup: auto-creates DB, tables, stored procedures, seeds 25 categorie
 SegFormer-B2 (~300MB) downloads automatically from HuggingFace on first tree/building/water detection.
 
 > Tip: For GPU inference with SegFormer, install `accelerate` via `pip install accelerate`.
+
+---
+
+## 🚀 Deployment (Free Platforms)
+
+See the full step-by-step guide: [DEPLOYMENT.md](./DEPLOYMENT.md)
+
+### Quick Summary
+
+| Component | Recommended Platform | Free Tier |
+|---|---|---|
+| **Frontend (React)** | [Vercel](https://vercel.com) | ✅ Unlimited static |
+| **Backend (FastAPI)** | [Render](https://render.com) | ✅ 750 hrs/month |
+| **Database (PostgreSQL)** | [Neon](https://neon.tech) | ✅ 512 MB free |
+| **Alternative Backend** | [Railway](https://railway.app) | ✅ $5 free credits/month |
+
+---
+
+## 📱 Mobile App (PWA)
+
+SkyRecon is **PWA-ready** (Progressive Web App). Users on Android and iOS can install it directly from the browser — no App Store needed.
+
+### Android
+1. Open the deployed URL in **Chrome**
+2. Tap **⋮ Menu → Add to Home Screen**
+3. Tap **Install** — it behaves exactly like a native app
+
+### iOS (iPhone/iPad)
+1. Open the deployed URL in **Safari**
+2. Tap **Share → Add to Home Screen**
+3. Tap **Add** — app icon appears on home screen
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for full PWA setup (manifest + service worker).
 
 ---
 
@@ -375,6 +411,7 @@ Every PDF/DOCX report includes:
 ---
 
 <p align="center">
-  <b>SkyRecon</b> – <em>AI Powered Aerial Intelligence & Disaster Monitoring Platform</em><br/>
-  Built with love at NIT Rourkela · 2026 Drone Internship
+  <b>SkyRecon</b> – <em>AI Powered Aerial Intelligence &amp; Disaster Monitoring Platform</em><br/>
+  Built with ❤️ at NIT Rourkela · 2026 Drone Internship<br/>
+  <strong>By: S. Khadanga</strong>
 </p>

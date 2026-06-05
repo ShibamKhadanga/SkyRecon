@@ -1,5 +1,17 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# SkyRecon – .gitignore
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Node / Frontend ────────────────────────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+*.local
+.cache/
+.parcel-cache/
+
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,49 +19,85 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Node
-node_modules
-dist
-dist-ssr
-*.local
+# ── Python / Backend ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
 
-# Editor directories and files
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+.env.bak
+
+# ── Secrets — CRITICAL — Never commit ─────────────────────────────────────────
+.env
+*.env
+!.env.example
+!backend/.env.example
+
+# ── Database files ─────────────────────────────────────────────────────────────
+*.db
+*.sqlite3
+*.sqlite
+
+# ── AI Model Weights (large binary — use Git LFS or cloud storage) ─────────────
+*.pt
+*.pth
+*.onnx
+*.engine
+*.trt
+*.weights
+!backend/yolov8n.pt    # Remove these lines if you DO want to track them via LFS
+
+# ── Uploads / Generated Media ──────────────────────────────────────────────────
+backend/uploads/
+backend/screenshots/
+backend/reports/
+backend/runs/
+media/
+
+# ── HuggingFace Cache (auto-downloaded models) ────────────────────────────────
+.cache/huggingface/
+huggingface/
+
+# ── Editor / IDE ───────────────────────────────────────────────────────────────
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+!.vscode/settings.json
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+*.swp
 
-# Python
-__pycache__/
-*.py[cod]
-*.pyd
-*.pyo
-*.egg-info/
-.pytest_cache/
-venv/
-.venv/
-env/
-
-# Secrets — CRITICAL
-.env
-*.env
-!.env.example
-
-# Database files
-*.db
-*.sqlite3
-
-# Uploads / media
-uploads/
-media/
-
-# OS
+# ── OS Files ───────────────────────────────────────────────────────────────────
+.DS_Store
 Thumbs.db
+desktop.ini
+ehthumbs.db
 
-# Model weights (large binary files)
-*.pt
+# ── Jupyter Notebooks (outputs only — keep .ipynb files) ──────────────────────
+.ipynb_checkpoints/
+
+# ── Deployment ─────────────────────────────────────────────────────────────────
+.vercel/
+.netlify/
+.render/
+render.yaml.local
+railway.local.json

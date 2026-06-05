@@ -3,9 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/skyrecon-favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="SkyRecon – AI Powered Aerial Intelligence & Disaster Monitoring Platform. Smart mapping, drone analytics, disaster detection, and emergency response." />
-    <meta name="theme-color" content="#06080d" />
+
+    <!-- ── PWA / Mobile App Meta ───────────────────────────────────────────── -->
+    <meta name="theme-color" content="#22c55e" />
+    <link rel="manifest" href="/manifest.json" />
+    <!-- iOS home screen install support -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="SkyRecon" />
+    <link rel="apple-touch-icon" href="/skyrecon-favicon.svg" />
+    <!-- Android -->
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- ── Open Graph (Social Sharing) ───────────────────────────────────────── -->
+    <meta property="og:title" content="SkyRecon – AI Drone Intelligence Platform" />
+    <meta property="og:description" content="AI-powered aerial mapping, disaster detection, and real-time drone analytics." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/skyrecon-favicon.svg" />
+
     <title>SkyRecon – AI Powered Drone Intelligence</title>
     <!-- Preconnect to Google Fonts to remove DNS/TCP latency -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />

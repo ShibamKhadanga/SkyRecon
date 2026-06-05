@@ -1,0 +1,20 @@
+{
+  "name": "SkyRecon – AI Drone Intelligence",
+  "short_name": "SkyRecon",
+  "description": "AI-powered aerial drone intelligence platform for mapping, disaster detection, and real-time analytics.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0e14",
+  "theme_color": "#22c55e",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/skyrecon-favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "screenshots": []
+}

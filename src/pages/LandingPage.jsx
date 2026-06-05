@@ -388,6 +388,32 @@ export default function LandingPage() {
               </motion.div>
         </motion.div>
       </div>
+      {/* ─── Signature ─── */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 2.2, duration: 0.8 }}
+        className="fixed bottom-5 right-6 z-50 flex flex-col items-end select-none"
+      >
+        <span
+          className="text-[0.6rem] font-mono tracking-[0.2em] uppercase text-[var(--text-muted)] mb-0.5"
+          style={{ letterSpacing: '0.18em' }}
+        >
+          Designed &amp; Built by
+        </span>
+        <span
+          className="text-xs font-mono font-semibold tracking-widest"
+          style={{
+            background: 'linear-gradient(90deg, #4ade80, #22d3ee)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text',
+            filter: 'drop-shadow(0 0 6px rgba(74,222,128,0.35))',
+          }}
+        >
+          S. Khadanga
+        </span>
+      </motion.div>
     </div>
   )
 }
