@@ -63,12 +63,17 @@ ENV/
 *.weights
 !backend/yolov8n.pt    # Remove these lines if you DO want to track them via LFS
 
-# ── Uploads / Generated Media ──────────────────────────────────────────────────
-backend/uploads/
-backend/screenshots/
-backend/reports/
-backend/runs/
-media/
+# ── Uploads / Generated Media (keep folder structure, ignore contents) ─────────
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/screenshots/*
+!backend/screenshots/.gitkeep
+backend/reports/*
+!backend/reports/.gitkeep
+backend/runs/*
+!backend/runs/.gitkeep
+media/*
+!media/.gitkeep
 
 # ── HuggingFace Cache (auto-downloaded models) ────────────────────────────────
 .cache/huggingface/
