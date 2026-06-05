@@ -4,6 +4,11 @@ from fastapi.staticfiles import StaticFiles
 from .core.config import settings
 from .database import init_db
 from .api.v1 import categories, analysis, dashboard, stream
+import os
+
+# Create directories BEFORE mounting — fixes startup crash on fresh containers
+for d in [settings.UPLOAD_DIR, settings.SCREENSHOTS_DIR, settings.REPORTS_DIR]:
+    os.makedirs(d, exist_ok=True)
 
 # Initialize FastAPI
 app = FastAPI(
@@ -27,9 +32,9 @@ app.add_middleware(
 app.include_router(categories.router, prefix="/api/v1")
 app.include_router(analysis.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
-app.include_router(stream.router,   prefix="/api/v1")
+app.include_router(stream.router,    prefix="/api/v1")
 
-# Serve uploaded videos, screenshots, and generated reports as static files
+# Serve static files (directories now guaranteed to exist)
 app.mount("/uploads",     StaticFiles(directory=settings.UPLOAD_DIR),      name="uploads")
 app.mount("/screenshots", StaticFiles(directory=settings.SCREENSHOTS_DIR), name="screenshots")
 app.mount("/reports",     StaticFiles(directory=settings.REPORTS_DIR),     name="reports")
@@ -37,13 +42,9 @@ app.mount("/reports",     StaticFiles(directory=settings.REPORTS_DIR),     name=
 
 @app.on_event("startup")
 def startup():
-    # Ensure all storage directories exist before mounting
-    import os
-    for d in [settings.UPLOAD_DIR, settings.SCREENSHOTS_DIR, settings.REPORTS_DIR]:
-        os.makedirs(d, exist_ok=True)
     init_db()
     print("[API] SkyRecon API started")
-    print(f"[API] Docs: http://localhost:8000/api/docs")
+    print(f"[API] Docs: http://localhost:7860/api/docs")
 
 
 @app.get("/api/health")

@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from pathlib import Path
+from typing import List
 
 
 class Settings(BaseSettings):
@@ -8,14 +10,12 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     # ── PostgreSQL Database ──
-    # Connection parameters (override via .env file)
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
     DB_NAME: str = "skyrecon"
     DB_USER: str = "postgres"
     DB_PASSWORD: str = "postgres"
 
-    # Constructed URL (SQLAlchemy format)
     @property
     def DATABASE_URL(self) -> str:
         return (
@@ -32,8 +32,26 @@ class Settings(BaseSettings):
     YOLO_MODEL: str = "yolov8s.pt"
     CONFIDENCE_THRESHOLD: float = 0.5
 
-    # CORS
-    ALLOWED_ORIGINS: list = ["http://localhost:3000", "http://localhost:5173"]
+    # CORS — accepts plain string, comma-separated, or JSON array from env
+    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def parse_allowed_origins(cls, v):
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            v = v.strip()
+            # JSON array format: ["url1","url2"]
+            if v.startswith("["):
+                import json
+                return json.loads(v)
+            # Comma-separated: url1,url2
+            if "," in v:
+                return [i.strip() for i in v.split(",")]
+            # Single value: * or https://example.com
+            return [v]
+        return v
 
     class Config:
         env_file = ".env"
