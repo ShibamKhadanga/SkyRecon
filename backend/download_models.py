@@ -19,6 +19,7 @@ MODELS = [
     ("skyrecon_flood.pt",       136),   # Fine-tuned: flood water
     ("skyrecon_trees_plants.pt", 89),   # Fine-tuned: trees & vegetation
     ("yolov8s.pt",               22),   # COCO general fallback (balanced)
+    ("yolov8x.pt",              136),  # Full accuracy base model
 ]
 
 
