@@ -5,21 +5,36 @@
 <h1 align="center">SkyRecon – AI Powered Drone Intelligence Platform</h1>
 
 <p align="center">
-  <b>Smart Aerial Mapping • Disaster Detection &amp; Response • Real-Time Drone Analytics</b><br/>
+  <b>Smart Aerial Mapping • Disaster Detection & Response • Real-Time Drone Analytics</b><br/>
   <em>Built for NIT Rourkela Drone Internship 2026</em><br/>
   <em>By: <strong>S. Khadanga</strong></em>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Frontend-React%2019%20+%20Vite%208-61DAFB?style=flat-square&logo=react" />
+  <img src="https://img.shields.io/badge/Frontend-React%2019%20+%20Vite%205-61DAFB?style=flat-square&logo=react" />
   <img src="https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square&logo=fastapi" />
   <img src="https://img.shields.io/badge/AI-YOLOv8%20+%20ByteTrack-FF6F00?style=flat-square" />
-  <img src="https://img.shields.io/badge/Database-PostgreSQL-4169E1?style=flat-square&logo=postgresql" />
+  <img src="https://img.shields.io/badge/Database-PostgreSQL%20%7C%20Neon-4169E1?style=flat-square&logo=postgresql" />
   <img src="https://img.shields.io/badge/Maps-Leaflet%20GIS-199900?style=flat-square&logo=leaflet" />
   <img src="https://img.shields.io/badge/Segmentation-SegFormer--B2-764ABC?style=flat-square" />
   <img src="https://img.shields.io/badge/Mobile-PWA%20Ready-5A0FC8?style=flat-square&logo=pwa" />
-  <img src="https://img.shields.io/badge/Deploy-Render%20%7C%20Railway-46E3B7?style=flat-square" />
+  <img src="https://img.shields.io/badge/Backend-HuggingFace%20Spaces-FFD21E?style=flat-square&logo=huggingface" />
+  <img src="https://img.shields.io/badge/Frontend-Vercel-000000?style=flat-square&logo=vercel" />
 </p>
+
+---
+
+## 🌐 Live Deployment
+
+| Service | URL | Platform |
+|---|---|---|
+| **Frontend** | [skyrecon.vercel.app](https://skyrecon.vercel.app) | Vercel |
+| **Backend API** | [shibamkhadanga-skyrecon.hf.space](https://shibamkhadanga-skyrecon.hf.space) | HuggingFace Spaces |
+| **API Health** | [/api/health](https://shibamkhadanga-skyrecon.hf.space/api/health) | — |
+| **API Docs** | [/api/docs](https://shibamkhadanga-skyrecon.hf.space/api/docs) | — |
+| **Database** | Neon PostgreSQL | neon.tech |
+| **GitHub Repo** | [ShibamKhadanga/SkyRecon](https://github.com/ShibamKhadanga/SkyRecon) | GitHub |
+| **Model Weights** | [Releases → v1.0-models](https://github.com/ShibamKhadanga/SkyRecon/releases/tag/v1.0-models) | GitHub Releases |
 
 ---
 
@@ -38,7 +53,7 @@ Four core modules:
 
 ## AI Models
 
-SkyRecon uses 4 specialized fine-tuned models alongside base YOLOv8:
+SkyRecon uses 5 specialized fine-tuned models alongside base YOLOv8:
 
 | Model File | Trained On | Best For |
 |---|---|---|
@@ -47,11 +62,11 @@ SkyRecon uses 4 specialized fine-tuned models alongside base YOLOv8:
 | `skyrecon_fire_smoke.pt` | Fire/Smoke dataset | Fire detection, smoke plumes |
 | `skyrecon_flood.pt` | Flood imagery | Flood water, inundated areas |
 | `skyrecon_trees_plants.pt` | Aerial vegetation | Trees & plants |
-| `yolov8s.pt` | COCO (general) | Fallback for all other categories |
-| `yolov8n.pt` | COCO (general) | Fast fallback |
-| `yolov8x.pt` | COCO (general) | High accuracy fallback |
+| `yolov8s.pt` | COCO (general) | Recommended fallback |
+| `yolov8n.pt` | COCO (general) | Fast fallback (free-tier servers) |
+| `yolov8x.pt` | COCO (general) | High accuracy (requires GPU) |
 
-The pipeline automatically selects the best model per category.
+The pipeline automatically selects the best model per category. On deployment, all models are downloaded at Docker build time from GitHub Releases via `download_models.py`.
 
 ---
 
@@ -82,25 +97,35 @@ Frame → SegFormer-B2 segmentation + OpenCV heuristics
 ### Frontend
 | | |
 |---|---|
-| React 19 + Vite 8 | UI + build |
+| React 19 + Vite 5 | UI + build |
 | TailwindCSS 4 + @tailwindcss/vite | Styling (Vite-native plugin) |
 | Framer Motion 12 | Animations |
 | React Router DOM 7 | Routing |
 | Recharts 3 | Charts |
 | Leaflet 1.9 + React-Leaflet 5 | GIS map |
 | Lucide React | Icons |
+| TypeScript 6 | Type checking |
 
 ### Backend
 | | |
 |---|---|
 | FastAPI | REST API |
-| SQLAlchemy 2.0 + PostgreSQL | Database |
+| SQLAlchemy 2.0 + PostgreSQL (Neon) | Database |
 | Ultralytics YOLOv8 | Detection + ByteTrack tracking |
 | OpenCV | Frame extraction + heuristic detection |
 | PyTorch | Deep learning runtime |
 | SegFormer-B2 (HuggingFace) | Aerial semantic segmentation |
 | CLIP `openai/clip-vit-base-patch32` | Object Finder feature matching |
 | ReportLab + python-docx | PDF + DOCX report generation |
+| Docker | Container for HuggingFace Spaces deployment |
+
+### Infrastructure
+| | |
+|---|---|
+| HuggingFace Spaces (Docker) | Backend hosting (free CPU/GPU) |
+| Vercel | Frontend hosting (free static) |
+| Neon | PostgreSQL database (free 512 MB) |
+| GitHub Releases | Model weight hosting (up to 2 GB/file) |
 
 ---
 
@@ -108,22 +133,25 @@ Frame → SegFormer-B2 segmentation + OpenCV heuristics
 
 ```
 SkyRecon/
-├── index.html                    # Entry HTML
-├── package.json                  # Frontend dependencies
-├── vite.config.js                # Vite bundler + proxy config
-├── tsconfig.json                 # TypeScript configuration
-├── src/                          # React frontend
-│   ├── main.jsx                  # App entry point
-│   ├── App.jsx                   # Routes (10 pages)
-│   ├── index.css                 # Global styles + Tailwind
+├── index.html                        # Entry HTML
+├── package.json                      # Frontend dependencies
+├── vite.config.js                    # Vite bundler + proxy config
+├── tsconfig.json                     # TypeScript configuration
+├── vercel.json                       # Vercel deploy config (rewrites → HF Space)
+├── render.yaml                       # Render.com IaC blueprint (alternative backend)
+│
+├── src/                              # React frontend source
+│   ├── main.jsx                      # App entry point
+│   ├── App.jsx                       # Routes (10 pages)
+│   ├── index.css                     # Global styles + Tailwind
 │   ├── layouts/
-│   │   └── AppLayout.jsx         # Sidebar + navbar (mobile responsive)
+│   │   └── AppLayout.jsx             # Sidebar + navbar (mobile responsive)
 │   ├── hooks/
-│   │   ├── useWeather.js         # Open-Meteo weather + drone safety check
-│   │   └── useRecordingsStore.js # localStorage recordings store + cross-tab sync
+│   │   ├── useWeather.js             # Open-Meteo weather + drone safety check
+│   │   └── useRecordingsStore.js     # localStorage recordings store + cross-tab sync
 │   ├── components/
-│   │   ├── Sidebar.jsx           # Navigation sidebar
-│   │   └── ui/                   # Reusable UI components
+│   │   ├── Sidebar.jsx               # Navigation sidebar
+│   │   └── ui/                       # Reusable UI components
 │   │       ├── AnimatedCounter.jsx
 │   │       ├── ConfidenceBar.jsx
 │   │       ├── FileDropzone.jsx
@@ -132,58 +160,80 @@ SkyRecon/
 │   │       ├── RadarPulse.jsx
 │   │       ├── SeverityBadge.jsx
 │   │       ├── StatCard.jsx
-│   │       └── WeatherBar.jsx    # Live weather strip + unsafe-to-fly warning banner
+│   │       └── WeatherBar.jsx        # Live weather strip + unsafe-to-fly warning banner
 │   └── pages/
-│       ├── LandingPage.jsx       # Module selection landing
-│       ├── DashboardPage.jsx     # Statistics dashboard
-│       ├── MappingPage.jsx       # Upload + config + results (mapping)
-│       ├── DisasterPage.jsx      # Upload + config + results (disaster)
-│       ├── MapPage.jsx           # GIS map with markers + heatmaps
-│       ├── ReportsPage.jsx       # Report listing + download
-│       ├── AdminPage.jsx         # Category & system management
-│       ├── LiveFeedPage.jsx      # Real-time drone stream + telemetry + recording
-│       ├── RecordingsPage.jsx    # Playback, download & manage saved recordings
-│       └── FindPage.jsx          # AI object finder (CLIP) in video or live stream
+│       ├── LandingPage.jsx           # Module selection landing
+│       ├── DashboardPage.jsx         # Statistics dashboard
+│       ├── MappingPage.jsx           # Upload + config + results (mapping)
+│       ├── DisasterPage.jsx          # Upload + config + results (disaster)
+│       ├── MapPage.jsx               # GIS map with markers + heatmaps
+│       ├── ReportsPage.jsx           # Report listing + download
+│       ├── AdminPage.jsx             # Category & system management
+│       ├── LiveFeedPage.jsx          # Real-time drone stream + telemetry + recording
+│       ├── RecordingsPage.jsx        # Playback, download & manage saved recordings
+│       └── FindPage.jsx              # AI object finder (CLIP) in video or live stream
 │
 ├── public/
-│   └── skyrecon-favicon.svg      # App favicon
+│   └── skyrecon-favicon.svg          # App favicon
 │
-└── backend/
-    ├── requirements.txt          # Python dependencies
-    ├── .env.example              # Environment variable template
-    ├── sql/
-    │   └── procedures.sql        # 12 PL/pgSQL stored procedures
+└── backend/                          # FastAPI backend (deployed to HuggingFace Spaces)
+    ├── Dockerfile                    # Docker image for HuggingFace Spaces (port 7860)
+    ├── Procfile                      # Render.com process definition
+    ├── requirements.txt              # Python dependencies
+    ├── download_models.py            # Downloads .pt weights from GitHub Releases at build time
+    ├── .env.example                  # Environment variable template
+    │
     ├── app/
     │   ├── __init__.py
-    │   ├── main.py               # FastAPI app + CORS + routes
-    │   ├── database.py           # SQLAlchemy engine + init
+    │   ├── main.py                   # FastAPI app + CORS + routes
+    │   ├── database.py               # SQLAlchemy engine + DB init
     │   ├── ai/
-    │   │   ├── video_processor.py    # Full mapping pipeline
-    │   │   ├── disaster_engine.py    # Disaster classification
-    │   │   ├── area_calculator.py    # bbox → real m²
+    │   │   ├── video_processor.py    # Full mapping pipeline (YOLO + ByteTrack + SegFormer)
+    │   │   ├── disaster_engine.py    # Disaster classification + severity scoring
+    │   │   ├── area_calculator.py    # Bounding box → real-world m²
     │   │   └── report_generator.py   # PDF + DOCX with screenshots
     │   ├── api/v1/
-    │   │   ├── analysis.py       # Upload, status, results, reports
-    │   │   ├── categories.py     # Category CRUD
-    │   │   ├── dashboard.py      # Stats + recent analyses
-    │   │   └── stream.py         # SSE real-time progress streaming
+    │   │   ├── analysis.py           # Upload, status, results, reports, object finder
+    │   │   ├── categories.py         # Category CRUD
+    │   │   ├── dashboard.py          # Stats + recent analyses + map markers
+    │   │   └── stream.py             # SSE real-time progress streaming
     │   ├── core/
-    │   │   ├── config.py         # Pydantic settings
-    │   │   └── seeder.py         # DB seeding (25 categories)
+    │   │   ├── config.py             # Pydantic settings
+    │   │   └── seeder.py             # DB seeding (25 categories)
     │   ├── models/
-    │   │   └── models.py         # SQLAlchemy ORM models
+    │   │   └── models.py             # SQLAlchemy ORM models
     │   └── schemas/
-    │       └── schemas.py        # Pydantic request/response schemas
+    │       └── schemas.py            # Pydantic request/response schemas
     │
-    ├── skyrecon_visdrone.pt       # Fine-tuned: aerial people + vehicles
-    ├── skyrecon_rdd2022.pt        # Fine-tuned: road damage + potholes
-    ├── skyrecon_fire_smoke.pt     # Fine-tuned: fire & smoke
-    ├── skyrecon_flood.pt          # Fine-tuned: flood water
-    ├── skyrecon_trees_plants.pt   # Fine-tuned: trees & plants
-    ├── yolov8s.pt                 # General COCO model (recommended)
-    ├── yolov8n.pt                 # Fast COCO model
-    └── yolov8x.pt                 # High-accuracy COCO model
+    ├── sql/
+    │   └── procedures.sql            # 12 PL/pgSQL stored procedures
+    │
+    ├── uploads/                      # Uploaded video/image files (runtime)
+    ├── screenshots/                  # Per-object cropped screenshots (runtime)
+    ├── reports/                      # Generated PDF/DOCX reports (runtime)
+    │
+    ├── SkyRecon_VisDrone_Training.ipynb      # Training notebook: VisDrone people & vehicles
+    ├── SkyRecon_FireSmoke_Training.ipynb     # Training notebook: fire & smoke detection
+    ├── SkyRecon_Flood_Training.ipynb         # Training notebook: flood water detection
+    ├── SkyRecon_RDD2022_RoadDamage.ipynb     # Training notebook: road damage & potholes
+    ├── SkyRecon_Buildings_Training.ipynb     # Training notebook: building segmentation
+    ├── SkyRecon_TreesPlants_Training.ipynb   # Training notebook: vegetation detection
+    │
+    ├── visdrone_download.py          # Script to download VisDrone dataset
+    ├── visdrone_convert.py           # Script to convert VisDrone annotations to YOLO format
+    ├── visdrone_train.py             # Script to run VisDrone training
+    │
+    ├── skyrecon_visdrone.pt          # Fine-tuned: aerial people + vehicles (136 MB)
+    ├── skyrecon_rdd2022.pt           # Fine-tuned: road damage + potholes (22 MB)
+    ├── skyrecon_fire_smoke.pt        # Fine-tuned: fire & smoke (545 MB)
+    ├── skyrecon_flood.pt             # Fine-tuned: flood water (136 MB)
+    ├── skyrecon_trees_plants.pt      # Fine-tuned: trees & plants (89 MB)
+    ├── yolov8s.pt                    # General COCO model (recommended)
+    ├── yolov8n.pt                    # Fast COCO model (free-tier safe)
+    └── yolov8x.pt                    # High-accuracy COCO model (GPU only)
 ```
+
+> **Note:** `.pt` model files are excluded from Git (`.gitignore`). They are hosted on [GitHub Releases → v1.0-models](https://github.com/ShibamKhadanga/SkyRecon/releases/tag/v1.0-models) and downloaded automatically at Docker build time via `download_models.py`.
 
 ---
 
@@ -211,26 +261,54 @@ cp .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
-On first startup: auto-creates DB, tables, stored procedures, seeds 25 categories.
+On first startup: auto-creates DB tables, runs stored procedures, seeds 25 categories.
 
-SegFormer-B2 (~300MB) downloads automatically from HuggingFace on first tree/building/water detection.
+SegFormer-B2 (~300 MB) downloads automatically from HuggingFace on first tree/building/water detection.
 
 > Tip: For GPU inference with SegFormer, install `accelerate` via `pip install accelerate`.
 
 ---
 
-## 🚀 Deployment (Free Platforms)
+## 🚀 Deployment (Actual Deployed Architecture)
 
-See the full step-by-step guide: [DEPLOYMENT.md](./DEPLOYMENT.md)
+```
+GitHub Repo (ShibamKhadanga/SkyRecon)
+  |-- Frontend (React/Vite)   --> Vercel          --> https://skyrecon.vercel.app  [FREE]
+  |-- Backend  (FastAPI+YOLO) --> HF Spaces       --> https://shibamkhadanga-skyrecon.hf.space [FREE]
+                                       |
+                                  Neon PostgreSQL                                              [FREE]
+```
 
-### Quick Summary
+> Vercel's `vercel.json` proxies all `/api/*`, `/uploads/*`, `/screenshots/*`, `/reports/*` requests directly to the HuggingFace Space — no CORS issues, single domain for the frontend.
 
-| Component | Recommended Platform | Free Tier |
+### Deployment Files
+
+| File | Purpose |
+|---|---|
+| `vercel.json` | Vercel rewrites → HF Space, SPA fallback, security headers |
+| `render.yaml` | Render.com IaC blueprint (alternative backend option) |
+| `backend/Dockerfile` | Python 3.11 Docker image, runs on port 7860 for HF Spaces |
+| `backend/Procfile` | Render.com start command |
+| `backend/download_models.py` | Downloads all `.pt` weights from GitHub Releases at build time |
+
+### Free Tier Performance
+
+| Platform | RAM | All Custom Models? | Cost |
+|---|---|---|---|
+| **HuggingFace Spaces CPU Basic** | 16 GB | ✅ All models run | Free |
+| Render Starter | 2 GB | ✅ yolov8s + custom | $7/month |
+| Render Free | 512 MB | ❌ yolov8n only | Free |
+
+| Model | Accuracy (mAP50) | On HF Spaces (deployed)? |
 |---|---|---|
-| **Frontend (React)** | [Vercel](https://vercel.com) | ✅ Unlimited static |
-| **Backend (FastAPI)** | [Render](https://render.com) | ✅ 750 hrs/month |
-| **Database (PostgreSQL)** | [Neon](https://neon.tech) | ✅ 512 MB free |
-| **Alternative Backend** | [Railway](https://railway.app) | ✅ $5 free credits/month |
+| `yolov8n.pt` | 37.3 — minimal | ✅ Runs |
+| `yolov8s.pt` | 44.9 — good | ✅ Runs |
+| `yolov8x.pt` | 53.9 — full | ✅ Runs (no GPU, slower) |
+| Custom `.pt` models | Custom trained | ✅ All 5 run |
+
+> **This deployment uses HuggingFace Spaces CPU Basic (2 vCPU · 16 GB RAM)** — all 5 custom fine-tuned models run without OOM. Upgrade to **T4 small GPU** ($0.40/hr) for real-time speed.
+
+See [skyrecon_deploy_guide.md](../skyrecon_deploy_guide.md) for the full step-by-step deployment guide.
 
 ---
 
@@ -244,11 +322,9 @@ SkyRecon is **PWA-ready** (Progressive Web App). Users on Android and iOS can in
 3. Tap **Install** — it behaves exactly like a native app
 
 ### iOS (iPhone/iPad)
-1. Open the deployed URL in **Safari**
+1. Open the deployed URL in **Safari** (Chrome on iOS does NOT support PWA install)
 2. Tap **Share → Add to Home Screen**
 3. Tap **Add** — app icon appears on home screen
-
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for full PWA setup (manifest + service worker).
 
 ---
 
@@ -256,19 +332,28 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for full PWA setup (manifest + service work
 
 | Variable | Default | Description |
 |---|---|---|
+| `DATABASE_URL` | — | Full Neon/PostgreSQL connection string (overrides individual DB_* vars) |
 | `DB_HOST` | `localhost` | PostgreSQL host |
 | `DB_PORT` | `5432` | PostgreSQL port |
 | `DB_NAME` | `skyrecon` | Database name |
 | `DB_USER` | `postgres` | Database user |
 | `DB_PASSWORD` | `postgres` | Database password |
-| `YOLO_MODEL` | `yolov8s.pt` | Base fallback model |
-| `CONFIDENCE_THRESHOLD` | `0.35` | Fallback confidence threshold |
+| `YOLO_MODEL` | `yolov8s.pt` | Base fallback model (`yolov8n.pt` on free tier) |
+| `CONFIDENCE_THRESHOLD` | `0.35` | Detection confidence threshold |
+| `ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated CORS origins |
+| `UPLOAD_DIR` | `uploads` | Directory for uploaded files |
+| `SCREENSHOT_DIR` | `screenshots` | Directory for per-object screenshots |
+| `REPORTS_DIR` | `reports` | Directory for generated reports |
+| `MAX_UPLOAD_SIZE_MB` | `500` | Maximum upload file size |
+
+Copy `.env.example` to `.env` and fill in your values for local development.
 
 ---
 
 ## API Reference
 
-Base URL: `http://localhost:8000`
+Base URL (local): `http://localhost:8000`  
+Base URL (deployed): `https://shibamkhadanga-skyrecon.hf.space`
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -287,8 +372,8 @@ Base URL: `http://localhost:8000`
 | `GET` | `/api/v1/analysis/` | List all analyses |
 | `GET` | `/api/v1/analysis/{id}` | Get single analysis |
 | `DELETE` | `/api/v1/analysis/{id}` | Delete analysis (cascade) |
-| `GET` | `/api/v1/analysis/category-stats` | Detection counts per category (all analyses) |
-| `GET` | `/api/v1/analysis/weekly-stats` | Analyses + detections grouped by day of week |
+| `GET` | `/api/v1/analysis/category-stats` | Detection counts per category |
+| `GET` | `/api/v1/analysis/weekly-stats` | Analyses + detections by day of week |
 | `GET` | `/api/v1/categories/` | List all 25 categories |
 | `POST` | `/api/v1/categories/` | Create category |
 | `PUT` | `/api/v1/categories/{id}` | Update category |
@@ -307,7 +392,7 @@ Static file mounts (served directly by FastAPI):
 | `/screenshots/*` | `backend/screenshots/` | Per-object cropped screenshots |
 | `/reports/*` | `backend/reports/` | Generated PDF/DOCX report files |
 
-Interactive docs: `http://localhost:8000/api/docs`
+Interactive docs: `http://localhost:8000/api/docs` or `https://shibamkhadanga-skyrecon.hf.space/api/docs`
 
 ---
 
@@ -410,8 +495,23 @@ Every PDF/DOCX report includes:
 
 ---
 
+## Training Notebooks
+
+Six Jupyter notebooks document the model fine-tuning process (located in `backend/`):
+
+| Notebook | Dataset | Model |
+|---|---|---|
+| `SkyRecon_VisDrone_Training.ipynb` | VisDrone2019 | People & vehicles from aerial |
+| `SkyRecon_FireSmoke_Training.ipynb` | Fire/Smoke dataset | Fire & smoke detection |
+| `SkyRecon_Flood_Training.ipynb` | Flood imagery | Flood water detection |
+| `SkyRecon_RDD2022_RoadDamage.ipynb` | RDD2022 | Road damage & potholes |
+| `SkyRecon_Buildings_Training.ipynb` | Aerial buildings | Building segmentation |
+| `SkyRecon_TreesPlants_Training.ipynb` | Aerial vegetation | Trees & plants detection |
+
+---
+
 <p align="center">
-  <b>SkyRecon</b> – <em>AI Powered Aerial Intelligence &amp; Disaster Monitoring Platform</em><br/>
+  <b>SkyRecon</b> – <em>AI Powered Aerial Intelligence & Disaster Monitoring Platform</em><br/>
   Built with ❤️ at NIT Rourkela · 2026 Drone Internship<br/>
   <strong>By: S. Khadanga</strong>
 </p>
