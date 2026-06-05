@@ -37,6 +37,5 @@
   "outputDirectory": "dist",
   "installCommand": "npm install",
   "framework": "vite",
-  "ignoreCommand": "exit 1",
-  "functions": {}
+  "ignoreCommand": "exit 1"
 }
