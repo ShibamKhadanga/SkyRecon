@@ -8,6 +8,8 @@ import GlassCard from '../components/ui/GlassCard'
 import NeonButton from '../components/ui/NeonButton'
 import SeverityBadge from '../components/ui/SeverityBadge'
 
+const API = import.meta.env.VITE_API_URL || ''
+
 export default function ReportsPage() {
   const [reports, setReports] = useState([])
   const [loading, setLoading] = useState(true)
@@ -21,13 +23,13 @@ export default function ReportsPage() {
     setLoading(true)
     try {
       // Fetch reports list from backend (includes all completed analyses)
-      const reportsRes = await fetch('/api/v1/analysis/reports/')
+      const reportsRes = await fetch(`${API}/api/v1/analysis/reports/`)
       if (reportsRes.ok) {
         const data = await reportsRes.json()
         setReports(data)
       } else {
         // Fallback: fetch completed analyses directly
-        const res = await fetch('/api/v1/analysis/?limit=50')
+        const res = await fetch(`${API}/api/v1/analysis/?limit=50`)
         const analyses = await res.json()
         const built = analyses
           .filter(a => a.status === 'completed')
@@ -61,7 +63,7 @@ export default function ReportsPage() {
     try {
       // Request report generation
       const res = await fetch(
-        `/api/v1/analysis/${aid}/report?report_type=${report.report_type || 'mapping'}&fmt=${fmt}`,
+        `${API}/api/v1/analysis/${aid}/report?report_type=${report.report_type || 'mapping'}&fmt=${fmt}`,
         { method: 'POST' }
       )
       if (!res.ok) throw new Error('Failed to start report generation')
@@ -74,12 +76,12 @@ export default function ReportsPage() {
         attempts++
         if (attempts > 30) { clearInterval(poll); setDownloading(null); return }
         try {
-          const sr = await fetch(`/api/v1/analysis/report/${rid}/status`)
+          const sr = await fetch(`${API}/api/v1/analysis/report/${rid}/status`)
           const sd = await sr.json()
           if (sd.status === 'ready') {
             clearInterval(poll)
             setDownloading(null)
-            window.open(`/api/v1/analysis/report/${rid}/download`, '_blank')
+            window.open(`${API}/api/v1/analysis/report/${rid}/download`, '_blank')
           } else if (sd.status === 'failed') {
             clearInterval(poll)
             setDownloading(null)
@@ -98,7 +100,7 @@ export default function ReportsPage() {
     if (!aid) return
     if (!confirm(`Delete analysis #${aid} and all its data?`)) return
     try {
-      await fetch(`/api/v1/analysis/${aid}`, { method: 'DELETE' })
+      await fetch(`${API}/api/v1/analysis/${aid}`, { method: 'DELETE' })
       setReports(prev => prev.filter(r => (r.analysis_id || r.id) !== aid))
     } catch (e) {
       alert(`Delete failed: ${e.message}`)
