@@ -1,0 +1,31 @@
+# Model weight files — downloaded at build time by download_models.py
+# DO NOT push these to HuggingFace Spaces (>10 MB limit)
+*.pt
+*.pth
+*.weights
+*.onnx
+*_openvino_model/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Environment
+.env
+*.env.local
+
+# Runtime-generated folders (kept via .gitkeep)
+uploads/*
+!uploads/.gitkeep
+screenshots/*
+!screenshots/.gitkeep
+reports/*
+!reports/.gitkeep
+runs/*
+!runs/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db

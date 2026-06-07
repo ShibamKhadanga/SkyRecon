@@ -54,14 +54,14 @@ ENV/
 *.sqlite3
 *.sqlite
 
-# ── AI Model Weights (large binary — use Git LFS or cloud storage) ─────────────
+# ── AI Model Weights (downloaded at runtime via download_models.py) ─────────────
 *.pt
 *.pth
 *.onnx
 *.engine
 *.trt
 *.weights
-!backend/yolov8n.pt    # Remove these lines if you DO want to track them via LFS
+*_openvino_model/
 
 # ── Uploads / Generated Media (keep folder structure, ignore contents) ─────────
 backend/uploads/*
