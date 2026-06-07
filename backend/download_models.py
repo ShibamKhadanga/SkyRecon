@@ -19,6 +19,8 @@ MODELS = [
     ("skyrecon_fire_smoke.pt",  136),   # Fine-tuned: fire & smoke (optimized — was 521MB)
     ("skyrecon_flood.pt",       136),   # Fine-tuned: flood water
     ("skyrecon_trees_plants.pt", 22),   # Fine-tuned: trees & vegetation (optimized — was 86MB)
+    ("skyrecon_buildings.pt",    23),   # Community: building detection
+    ("skyrecon_solar_panels.pt", 23),   # Community: solar panel detection
     ("yolov8s.pt",               22),   # COCO general fallback (balanced)
     ("yolov8x.pt",              136),   # Full accuracy base model
 ]

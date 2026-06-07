@@ -142,6 +142,8 @@ SPECIALIST_MODELS: dict[str, str] = {
     "houses":             "skyrecon_buildings.pt",
     "warehouses":         "skyrecon_buildings.pt",
     "shops":              "skyrecon_buildings.pt",
+    # Solar panels - community model from HuggingFace
+    "solar panels":       "skyrecon_solar_panels.pt",
 }
 
 def _get_model(model_path: str) -> YOLO:
@@ -198,13 +200,16 @@ YOLO_TO_CATEGORY: dict[str, str] = {
     "wine glass": "Garbage Areas",
     "keyboard": "Buildings", "mouse": "Buildings",
     "clock": "Buildings", "teddy bear": "People",
+    # Community HuggingFace models
+    "solar-panel": "Solar Panels",
+    "Building":    "Buildings",
 }
 
 # ── Heuristic-only categories (not detectable via YOLO COCO classes) ──────────
 # These use OpenCV image analysis instead of / in addition to YOLO.
 HEURISTIC_CATEGORIES = {
     "trees", "road potholes", "water bodies", "flood water",
-    "fire & smoke", "solar panels", "agricultural land",
+    "fire & smoke", "agricultural land",
     "construction zones", "parking areas", "roads",
     "electric poles", "street lights", "buildings", "houses",
     "bridges", "warehouses", "shops", "pipelines",
