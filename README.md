@@ -313,7 +313,7 @@ GitHub Repo (ShibamKhadanga/SkyRecon)
 | `yolov8n.pt` | 37.3 — minimal | ✅ Runs |
 | `yolov8s.pt` | 44.9 — good | ✅ Runs |
 | `yolov8x.pt` | 53.9 — full | ✅ Runs (no GPU, slower) |
-| Custom `.pt` models | Custom trained | ✅ All 5 run |
+| Custom `.pt` models | Custom trained | ✅ All 7 run |
 
 > **This deployment uses HuggingFace Spaces CPU Basic (2 vCPU · 16 GB RAM)** — all 5 custom fine-tuned models run without OOM. Upgrade to **T4 small GPU** ($0.40/hr) for real-time speed.
 
@@ -481,12 +481,12 @@ Access at `/recordings`. All recordings captured from the Live Feed page are sto
 | Trees | `skyrecon_trees_plants.pt` | SegFormer-B2 + ExG index |
 | Plants | `skyrecon_trees_plants.pt` | SegFormer-B2 + HSV green |
 | Water Bodies | `yolov8s.pt` | SegFormer-B2 + HSV blue |
-| Buildings | `yolov8s.pt` | SegFormer-B2 + solidity |
-| Houses | `yolov8s.pt` | SegFormer-B2 + solidity |
+| Buildings | `skyrecon_buildings.pt` | YOLOv8 segmentation + solidity |
+| Houses | `skyrecon_buildings.pt` | YOLOv8 segmentation + solidity |
 | Roads | `yolov8s.pt` | HSV asphalt + elongation |
 | Electric Poles | `yolov8s.pt` | Vertical edge detection |
 | Street Lights | `yolov8s.pt` | Vertical edge detection |
-| Solar Panels | `yolov8s.pt` | HSV dark-blue mask |
+| Solar Panels | `skyrecon_solar_panels.pt` | YOLOv8 segmentation + HSV mask |
 | Agricultural Land | `yolov8s.pt` | HSV green + brown |
 | Construction Zones | `yolov8s.pt` | HSV earth + yellow |
 | Parking Areas | `yolov8s.pt` | HSV asphalt + area |
