@@ -123,21 +123,37 @@ def is_cancelled(analysis_id: int) -> bool:
 
 @router.post("/find-object")
 async def find_object(
-    target_image: Optional[UploadFile] = File(None),
+    target_image: UploadFile = File(...),
     video: Optional[UploadFile] = File(None),
     live_url: Optional[str] = Form(None),
-    search_mode: str = Form("visual"),           # "visual" | "facial"
-    facial_attributes: str = Form("{}"),         # JSON: gender, age_group, hair_color, etc.
 ):
     """
-    Find a target in drone video.
-
-    search_mode=visual  — CLIP whole-frame similarity vs target photo (default)
-    search_mode=facial  — YOLO person detect + face crop + CLIP facial attribute matching
+    Given a target image and a video (uploaded or live URL),
+    finds all frames where the target object/person appears.
+    Uses CLIP for feature similarity matching.
     """
-    import cv2, tempfile, base64, json
+    import cv2, numpy as np, tempfile, base64
     from PIL import Image as PILImage
     import io
+
+    # ── Load CLIP ──
+    try:
+        import torch
+        from transformers import CLIPProcessor, CLIPModel
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+        clip_proc  = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to load CLIP model: {e}")
+
+    # ── Encode target image ──
+    target_bytes = await target_image.read()
+    target_pil   = PILImage.open(io.BytesIO(target_bytes)).convert("RGB")
+    with torch.no_grad():
+        t_inputs = clip_proc(images=target_pil, return_tensors="pt")
+        # Pass only pixel_values to get_image_features to avoid unexpected key errors
+        target_feat = clip_model.get_image_features(pixel_values=t_inputs["pixel_values"].to(device))
+        target_feat = target_feat / target_feat.norm(dim=-1, keepdim=True)
 
     # ── Get video path ──
     tmp_video = None
@@ -152,61 +168,18 @@ async def find_object(
     else:
         raise HTTPException(400, "Provide either a video file or live_url")
 
+    # ── Scan frames ──
+    SIMILARITY_THRESHOLD = 0.72
+    FRAME_INTERVAL = 30   # check every 30 frames (~1s at 30fps)
+    matches = []
+
     try:
-        # ── Facial attribute search ───────────────────────────────────────────
-        if search_mode.strip().lower() == "facial":
-            try:
-                attrs = json.loads(facial_attributes or "{}")
-            except Exception:
-                attrs = {}
-
-            if not attrs and target_image is None:
-                raise HTTPException(
-                    400,
-                    "Facial search requires at least one attribute or a reference face photo.",
-                )
-
-            target_bytes = None
-            if target_image is not None:
-                target_bytes = await target_image.read()
-
-            from ...ai.face_finder import scan_video_facial_attributes
-            return scan_video_facial_attributes(
-                video_path=video_path,
-                attributes=attrs,
-                target_image_bytes=target_bytes,
-            )
-
-        # ── Visual CLIP search (original behaviour) ───────────────────────────
-        if target_image is None:
-            raise HTTPException(400, "Visual search requires a target image.")
-
-        try:
-            import torch
-            from transformers import CLIPProcessor, CLIPModel
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-            clip_proc  = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-        except Exception as e:
-            raise HTTPException(500, f"Failed to load CLIP model: {e}")
-
-        target_bytes = await target_image.read()
-        target_pil   = PILImage.open(io.BytesIO(target_bytes)).convert("RGB")
-        with torch.no_grad():
-            t_inputs = clip_proc(images=target_pil, return_tensors="pt")
-            target_feat = clip_model.get_image_features(pixel_values=t_inputs["pixel_values"].to(device))
-            target_feat = target_feat / target_feat.norm(dim=-1, keepdim=True)
-
-        SIMILARITY_THRESHOLD = 0.72
-        FRAME_INTERVAL = 30
-        matches = []
-        frame_idx = 0
-
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise HTTPException(400, "Cannot open video source")
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        frame_idx = 0
 
         while True:
             ret, frame = cap.read()
@@ -215,9 +188,12 @@ async def find_object(
 
             if frame_idx % FRAME_INTERVAL == 0:
                 timestamp = frame_idx / fps
+
+                # Convert frame to PIL
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame_pil = PILImage.fromarray(frame_rgb)
 
+                # CLIP similarity
                 with torch.no_grad():
                     f_inputs = clip_proc(images=frame_pil, return_tensors="pt")
                     frame_feat = clip_model.get_image_features(pixel_values=f_inputs["pixel_values"].to(device))
@@ -225,8 +201,10 @@ async def find_object(
                     similarity = float((target_feat @ frame_feat.T).squeeze())
 
                 if similarity >= SIMILARITY_THRESHOLD:
+                    # Capture thumbnail as base64 JPEG
                     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                     thumb_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode()
+
                     matches.append({
                         "timestamp":   round(timestamp, 2),
                         "confidence":  round(similarity, 3),
@@ -237,19 +215,14 @@ async def find_object(
             frame_idx += 1
 
         cap.release()
-        matches.sort(key=lambda x: x["confidence"], reverse=True)
-        return {
-            "matches": matches,
-            "total_scanned": frame_idx,
-            "threshold": SIMILARITY_THRESHOLD,
-            "search_mode": "visual",
-        }
     finally:
         if tmp_video:
-            try:
-                os.unlink(tmp_video.name)
-            except Exception:
-                pass
+            try: os.unlink(tmp_video.name)
+            except: pass
+
+    # Sort by confidence descending
+    matches.sort(key=lambda x: x["confidence"], reverse=True)
+    return {"matches": matches, "total_scanned": frame_idx, "threshold": SIMILARITY_THRESHOLD}
 
 
 # ── Upload & start ─────────────────────────────────────────────────────────────
