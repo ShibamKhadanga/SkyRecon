@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 # ── SegFormer segmentation model cache ───────────────────────────────────────
 _seg_model_cache: dict = {}
+_seg_frame_counter: dict = {}  # category -> frame count, for subsampling
+SEG_SUBSAMPLE = 5  # run SegFormer every Nth heuristic frame (not every frame)
 
 def _get_seg_model():
     """
@@ -85,11 +87,20 @@ SEG_CATEGORY_MAP = {
 def _run_segformer(
     frame: np.ndarray,
     target_cat: str,
+    force: bool = False,
 ) -> Optional[np.ndarray]:
     """
     Run SegFormer-B2 on a frame and return a binary mask for the target category.
-    Returns None if SegFormer is unavailable.
+    Subsampled to every SEG_SUBSAMPLE calls to avoid running on every frame.
+    Returns None if SegFormer is unavailable or subsampled out.
     """
+    # Subsample: skip most frames to avoid transformer overhead every frame
+    global _seg_frame_counter
+    key = target_cat.strip().lower()
+    _seg_frame_counter[key] = _seg_frame_counter.get(key, 0) + 1
+    if not force and _seg_frame_counter[key] % SEG_SUBSAMPLE != 1:
+        return None  # skip this frame
+
     seg = _get_seg_model()
     if seg is None:
         return None
@@ -1448,7 +1459,20 @@ def run_mapping_analysis(
         iou_threshold  = cat_cfg["iou"]
         logger.info(f"[AI] Config: fps={fps_sample}, conf={conf_threshold}")
 
+        # Pre-load model before opening video — avoids blocking mid-loop on first frame
         model      = _get_model_for_category(settings.YOLO_MODEL, selected_category)
+
+        # Pre-warm SegFormer for categories that need it — prevents 5% stuck on first frame
+        SEG_CATEGORIES = {
+            "trees", "plants", "water bodies", "flood water",
+            "buildings", "houses", "warehouses", "shops",
+        }
+        if cat_key in SEG_CATEGORIES:
+            logger.info(f"[AI] Pre-warming SegFormer for '{cat_key}'...")
+            _write_progress(db, analysis_id, 3, 0)
+            _get_seg_model()  # loads + caches before the frame loop
+            logger.info("[AI] SegFormer ready")
+
         cat_cache  = _build_category_cache(db)
         chars_str  = json.dumps(characteristics)
         target_cat = selected_category.strip()
@@ -1469,9 +1493,7 @@ def run_mapping_analysis(
             fps            = cap.get(cv2.CAP_PROP_FPS) or 25.0
             total_frames   = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             frame_interval = max(1, int(fps / fps_sample))
-            # Check if the codec supports random seek (avoids decoding skipped frames)
-            _supports_seek = cap.get(cv2.CAP_PROP_POS_FRAMES) >= 0
-            logger.info(f"[AI] {total_frames} frames @ {fps:.1f}fps, interval={frame_interval}, seek={_supports_seek}")
+            logger.info(f"[AI] {total_frames} frames @ {fps:.1f}fps, interval={frame_interval}")
 
         # ── Tracking state ──
         # confirmed_ids: set of unique object keys actually counted
@@ -1704,33 +1726,40 @@ def run_mapping_analysis(
             flush_batch()
             _write_progress(db, analysis_id, 100, len(confirmed_ids))
         else:
-            # Use seek-based iteration to skip decoding of unwanted frames
-            sampled_indices = range(0, total_frames, frame_interval)
-            for frame_idx in sampled_indices:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            # Sequential decode — skip unwanted frames without seeking
+            # (seek + decode is slower than sequential read+skip on CPU)
+            frame_idx = 0
+            processed = 0
+            total_sampled = max(1, total_frames // frame_interval)
+
+            while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
 
-                # Check if cancelled by user
-                from ..api.v1.analysis import is_cancelled
-                if is_cancelled(analysis_id):
-                    logger.info(f"[AI] Analysis {analysis_id} cancelled by user at frame {frame_idx}")
-                    cap.release()
-                    flush_batch()
-                    return {"analysis_id": analysis_id, "cancelled": True}
-
-                process_frame(frame, frame_idx, frame_idx / fps)
-
-                if total_frames > 0:
-                    pct = min(99, int((frame_idx / total_frames) * 100))
-                    if pct >= last_progress + 5:
+                if frame_idx % frame_interval == 0:
+                    # Check if cancelled by user
+                    from ..api.v1.analysis import is_cancelled
+                    if is_cancelled(analysis_id):
+                        logger.info(f"[AI] Analysis {analysis_id} cancelled by user at frame {frame_idx}")
+                        cap.release()
                         flush_batch()
-                        _write_progress(db, analysis_id, pct, len(confirmed_ids))
+                        return {"analysis_id": analysis_id, "cancelled": True}
+
+                    process_frame(frame, frame_idx, frame_idx / fps)
+                    processed += 1
+
+                    # Update progress every 2% or every 10 processed frames (whichever is more frequent)
+                    pct = min(99, int((processed / total_sampled) * 100))
+                    if pct >= last_progress + 2 or processed % 10 == 0:
+                        flush_batch()
+                        _write_progress(db, analysis_id, max(5, pct), len(confirmed_ids))
                         last_progress = pct
                         logger.info(
-                            f"[AI] {pct}% | {len(confirmed_ids)} unique objects tracked"
+                            f"[AI] {pct}% ({processed}/{total_sampled} frames) | {len(confirmed_ids)} unique objects"
                         )
+
+                frame_idx += 1
 
             cap.release()
             flush_batch()
