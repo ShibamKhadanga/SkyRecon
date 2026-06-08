@@ -1,14 +1,13 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { 
+import {
   FileText, Download, Eye, Calendar, BarChart3,
   Filter, Search, FileIcon, Trash2, X, RefreshCw
 } from 'lucide-react'
 import GlassCard from '../components/ui/GlassCard'
 import NeonButton from '../components/ui/NeonButton'
 import SeverityBadge from '../components/ui/SeverityBadge'
-
-const API = import.meta.env.VITE_API_URL || ''
+import { fetchJson } from '../lib/api'
 
 export default function ReportsPage() {
   const [reports, setReports] = useState([])
@@ -23,28 +22,30 @@ export default function ReportsPage() {
     setLoading(true)
     try {
       // Fetch reports list from backend (includes all completed analyses)
-      const reportsRes = await fetch(`${API}/api/v1/analysis/reports/`)
-      if (reportsRes.ok) {
-        const data = await reportsRes.json()
+      try {
+        const data = await fetchJson('/api/v1/analysis/reports/')
         setReports(data)
-      } else {
+      } catch (e) {
         // Fallback: fetch completed analyses directly
-        const res = await fetch(`${API}/api/v1/analysis/?limit=50`)
-        const analyses = await res.json()
-        const built = analyses
-          .filter(a => a.status === 'completed')
-          .map(a => ({
-            id: null,
-            analysis_id: a.id,
-            title: a.project_name || `Analysis #${a.id}`,
-            report_type: 'mapping',
-            format: 'pdf',
-            status: 'ready',
-            total_objects: a.total_objects || 0,
-            created_at: a.completed_at || a.created_at,
-            processing_time: a.processing_time,
-          }))
-        setReports(built)
+        try {
+          const analyses = await fetchJson('/api/v1/analysis/?limit=50')
+          const built = analyses
+            .filter(a => a.status === 'completed')
+            .map(a => ({
+              id: null,
+              analysis_id: a.id,
+              title: a.project_name || `Analysis #${a.id}`,
+              report_type: 'mapping',
+              format: 'pdf',
+              status: 'ready',
+              total_objects: a.total_objects || 0,
+              created_at: a.completed_at || a.created_at,
+              processing_time: a.processing_time,
+            }))
+          setReports(built)
+        } catch {
+          setReports([])
+        }
       }
     } catch (e) {
       console.error('Failed to fetch reports:', e)
@@ -62,12 +63,10 @@ export default function ReportsPage() {
     setDownloading(`${aid}-${fmt}`)
     try {
       // Request report generation
-      const res = await fetch(
-        `${API}/api/v1/analysis/${aid}/report?report_type=${report.report_type || 'mapping'}&fmt=${fmt}`,
+      const data = await fetchJson(
+        `/api/v1/analysis/${aid}/report?report_type=${report.report_type || 'mapping'}&fmt=${fmt}`,
         { method: 'POST' }
       )
-      if (!res.ok) throw new Error('Failed to start report generation')
-      const data = await res.json()
       const rid = data.report_id
 
       // Poll until ready
@@ -76,18 +75,19 @@ export default function ReportsPage() {
         attempts++
         if (attempts > 30) { clearInterval(poll); setDownloading(null); return }
         try {
-          const sr = await fetch(`${API}/api/v1/analysis/report/${rid}/status`)
-          const sd = await sr.json()
+          const sd = await fetchJson(`/api/v1/analysis/report/${rid}/status`)
           if (sd.status === 'ready') {
             clearInterval(poll)
             setDownloading(null)
-            window.open(`${API}/api/v1/analysis/report/${rid}/download`, '_blank')
+            window.open(`/api/v1/analysis/report/${rid}/download`, '_blank')
           } else if (sd.status === 'failed') {
             clearInterval(poll)
             setDownloading(null)
             alert('Report generation failed.')
           }
-        } catch (_) {}
+        } catch (_) {
+          // Keep polling until service recovers or timeout expires
+        }
       }, 2000)
     } catch (e) {
       setDownloading(null)
@@ -100,7 +100,7 @@ export default function ReportsPage() {
     if (!aid) return
     if (!confirm(`Delete analysis #${aid} and all its data?`)) return
     try {
-      await fetch(`${API}/api/v1/analysis/${aid}`, { method: 'DELETE' })
+      await fetchJson(`/api/v1/analysis/${aid}`, { method: 'DELETE' })
       setReports(prev => prev.filter(r => (r.analysis_id || r.id) !== aid))
     } catch (e) {
       alert(`Delete failed: ${e.message}`)

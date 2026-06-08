@@ -12,22 +12,15 @@ import urllib.request
 BASE_URL = "https://github.com/ShibamKhadanga/SkyRecon/releases/download/v1.0-models"
 
 # All models needed by SkyRecon's AI pipeline
-# Sizes updated after stripping optimizer state + FP16 conversion
 MODELS = [
     ("skyrecon_visdrone.pt",    136),   # Fine-tuned: aerial people + vehicles
     ("skyrecon_rdd2022.pt",      22),   # Fine-tuned: road damage + potholes
-    ("skyrecon_fire_smoke.pt",  136),   # Fine-tuned: fire & smoke (optimized — was 521MB)
+    ("skyrecon_fire_smoke.pt",  545),   # Fine-tuned: fire & smoke
     ("skyrecon_flood.pt",       136),   # Fine-tuned: flood water
-    ("skyrecon_trees_plants.pt", 22),   # Fine-tuned: trees & vegetation (optimized — was 86MB)
-    ("skyrecon_buildings.pt",    23),   # Community: building detection
-    ("skyrecon_solar_panels.pt", 23),   # Community: solar panel detection
+    ("skyrecon_trees_plants.pt", 89),   # Fine-tuned: trees & vegetation
     ("yolov8s.pt",               22),   # COCO general fallback (balanced)
-    ("yolov8x.pt",              136),   # Full accuracy base model
+    ("yolov8x.pt",              136),  # Full accuracy base model
 ]
-
-# Maximum allowed file size (MB). If a downloaded model is larger, it probably
-# contains optimizer state and will degrade inference quality.
-MAX_MODEL_SIZE_MB = 200
 
 
 def _progress_hook(block_num, block_size, total_size):
@@ -48,12 +41,7 @@ def download_models():
     for model_name, approx_mb in MODELS:
         if os.path.exists(model_name):
             size_mb = os.path.getsize(model_name) / (1024 * 1024)
-            # Validate existing model isn't bloated
-            if size_mb > MAX_MODEL_SIZE_MB:
-                print(f"[WARN] {model_name} is {size_mb:.0f} MB (max {MAX_MODEL_SIZE_MB} MB)")
-                print(f"       Run: python optimize_models.py {model_name}")
-            else:
-                print(f"[SKIP] {model_name} already exists ({size_mb:.0f} MB)")
+            print(f"[SKIP] {model_name} already exists ({size_mb:.0f} MB)")
             continue
 
         url = f"{BASE_URL}/{model_name}"
@@ -62,13 +50,7 @@ def download_models():
 
         try:
             urllib.request.urlretrieve(url, model_name, reporthook=_progress_hook)
-            # Validate downloaded size
-            actual_mb = os.path.getsize(model_name) / (1024 * 1024)
-            if actual_mb > MAX_MODEL_SIZE_MB:
-                print(f"\n[WARN] {model_name} is {actual_mb:.0f} MB — may contain optimizer state")
-                print(f"       Run: python optimize_models.py {model_name}")
-            else:
-                print(f"\n[OK]   {model_name} downloaded successfully ({actual_mb:.0f} MB)")
+            print(f"\n[OK]   {model_name} downloaded successfully")
         except Exception as e:
             print(f"\n[ERR]  Failed to download {model_name}: {e}")
             print(f"       Upload it manually to GitHub Releases → v1.0-models")
@@ -80,4 +62,3 @@ def download_models():
 
 if __name__ == "__main__":
     download_models()
-

@@ -142,8 +142,6 @@ SPECIALIST_MODELS: dict[str, str] = {
     "houses":             "skyrecon_buildings.pt",
     "warehouses":         "skyrecon_buildings.pt",
     "shops":              "skyrecon_buildings.pt",
-    # Solar panels - community model from HuggingFace
-    "solar panels":       "skyrecon_solar_panels.pt",
 }
 
 def _get_model(model_path: str) -> YOLO:
@@ -200,16 +198,13 @@ YOLO_TO_CATEGORY: dict[str, str] = {
     "wine glass": "Garbage Areas",
     "keyboard": "Buildings", "mouse": "Buildings",
     "clock": "Buildings", "teddy bear": "People",
-    # Community HuggingFace models
-    "solar-panel": "Solar Panels",
-    "Building":    "Buildings",
 }
 
 # ── Heuristic-only categories (not detectable via YOLO COCO classes) ──────────
 # These use OpenCV image analysis instead of / in addition to YOLO.
 HEURISTIC_CATEGORIES = {
     "trees", "road potholes", "water bodies", "flood water",
-    "fire & smoke", "agricultural land",
+    "fire & smoke", "solar panels", "agricultural land",
     "construction zones", "parking areas", "roads",
     "electric poles", "street lights", "buildings", "houses",
     "bridges", "warehouses", "shops", "pipelines",
@@ -257,27 +252,12 @@ def _matches_characteristics(
     cls_name: str | None,
     crop: np.ndarray | None,
 ) -> bool:
-    """
-    Comprehensive characteristic filtering for ALL 25 SkyRecon categories.
-
-    Uses OpenCV heuristics (HSV colour, edge density, contour area, aspect ratio)
-    to implement best-effort filtering from aerial drone footage.  Filters that
-    are fundamentally impossible from altitude pass through silently (return True).
-    """
     if not characteristics or not isinstance(characteristics, dict):
         return True
-    # Helper: treat missing / "All" values as no-filter
-    def _get(key: str) -> str:
-        v = characteristics.get(key, "All")
-        return v if v and v != "All" else "All"
-
     cat_lower = target_cat.strip().lower()
 
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #  1. VEHICLES
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     if cat_lower == "vehicles":
-        vehicle_type = _get("type")
+        vehicle_type = characteristics.get("type", "All")
         if vehicle_type != "All" and cls_name is not None:
             vehicle_filters = {
                 "Light Vehicle (Sedan/SUV)": {"car"},
@@ -285,590 +265,41 @@ def _matches_characteristics(
                 "2-Wheeler": {"motorcycle", "bicycle"},
                 "3-Wheeler": {"motorcycle", "bicycle"},
                 "4-Wheeler": {"car", "truck", "bus"},
-                "6-Wheeler": {"truck", "bus"},
                 "Bike": {"bicycle", "motorcycle"},
                 "Scooty": {"motorcycle", "bicycle"},
                 "Car": {"car"},
                 "Bus": {"bus"},
                 "Truck": {"truck"},
-                "Ambulance": {"truck", "car"},  # YOLO doesn't separate ambulance
-                "Police Vehicle": {"car"},
             }
             allowed = vehicle_filters.get(vehicle_type, {cls_name})
             if cls_name not in allowed:
                 return False
-        vehicle_color = _get("color")
+        vehicle_color = characteristics.get("color", "All")
         if vehicle_color != "All" and crop is not None:
             detected_color = _infer_color_label(crop)
             if detected_color != vehicle_color:
                 return False
-        # Movement: requires temporal analysis — pass through
-        # Structural damage: approximate via edge chaos
-        damaged = _get("damaged")
-        if damaged != "All" and crop is not None:
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 50, 150)
-            edge_density = np.count_nonzero(edges) / max(1, edges.size)
-            if damaged == "Damaged" and edge_density < 0.12:
-                return False
-            if damaged == "Undamaged" and edge_density > 0.25:
-                return False
 
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #  2. PEOPLE
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "people":
-        # Gender / Age: best-effort from body size
-        gender = _get("gender")
-        if gender != "All" and crop is not None:
-            h_crop, w_crop = crop.shape[:2]
-            area = h_crop * w_crop
-            if gender == "Child" and area > 2500:
-                return False  # children are smaller blobs from aerial
-            if gender == "Elderly":
-                pass  # not distinguishable from altitude
-            if gender == "Worker":
-                # workers typically wear bright safety gear
-                yellow_r = _region_hsv_ratio(crop, [18, 100, 100], [35, 255, 255])
-                orange_r = _region_hsv_ratio(crop, [10, 100, 100], [20, 255, 255])
-                if (yellow_r + orange_r) < 0.08:
-                    return False
-            # Male / Female: approximate via dominant clothing colour distribution
-            # Upper body colour tends to differ statistically but is unreliable
-            # from >30m altitude — we apply a loose heuristic
-            if gender in ("Male", "Female"):
-                # Darker, cooler clothing → Male bias; brighter, warmer → Female bias
-                # This is ~55% accurate at best — intentional loose filter
-                hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-                mean_s = float(np.mean(hsv[:, :, 1]))
-                mean_v = float(np.mean(hsv[:, :, 2]))
-                if gender == "Male" and mean_s > 120 and mean_v > 180:
-                    return False  # very bright saturated clothing → skip
-                if gender == "Female" and mean_s < 30 and mean_v < 80:
-                    return False  # very dark desaturated clothing → skip
-
-        # Clothing Colour
-        clothing_color = _get("clothingColor")
-        if clothing_color != "All" and crop is not None:
-            detected_color = _infer_color_label(crop)
-            if detected_color != clothing_color:
-                return False
-
-        # Safety Equipment
-        safety = _get("safety")
-        if safety != "All" and crop is not None:
-            yellow_r = _region_hsv_ratio(crop, [18, 100, 100], [35, 255, 255])
-            orange_r = _region_hsv_ratio(crop, [10, 100, 100], [20, 255, 255])
-            has_bright_gear = (yellow_r + orange_r) > 0.12
-            # Helmet: bright/white region in top quarter of crop
-            h_crop = crop.shape[0]
-            top_quarter = crop[:max(1, h_crop // 4), :]
-            helmet_bright = 0.0
-            if top_quarter.size > 0:
-                white_r = _region_hsv_ratio(top_quarter, [0, 0, 180], [180, 60, 255])
-                yellow_top = _region_hsv_ratio(top_quarter, [18, 80, 100], [35, 255, 255])
-                helmet_bright = white_r + yellow_top
-
-            if safety == "Helmet Detected" and helmet_bright < 0.08:
-                return False
-            if safety == "Safety Jacket Detected" and not has_bright_gear:
-                return False
-            if safety == "Both Detected" and (not has_bright_gear or helmet_bright < 0.08):
-                return False
-            if safety == "No Equipment" and (has_bright_gear or helmet_bright > 0.12):
-                return False
-
-        # Activity State — bounding box aspect ratio
-        activity = _get("activity")
-        if activity != "All" and crop is not None:
-            h_crop, w_crop = crop.shape[:2]
-            aspect = w_crop / max(h_crop, 1)  # width / height
-            if activity == "Standing" and aspect > 1.8:
-                return False  # standing person is tall (narrow bbox)
-            if activity == "Sitting" and (aspect < 0.5 or aspect > 2.5):
-                return False  # sitting person is roughly square
-            if activity == "Lying" and aspect < 1.4:
-                return False  # lying person is wide bbox
-
-        # Crowd Density — handled at aggregation level, not per-detection
-        # pass through here; density is computed post-counting
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #  3. PLANTS
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "plants":
-        plant_type = _get("type")
-        if plant_type != "All" and crop is not None:
-            area = crop.shape[0] * crop.shape[1]
-            if plant_type == "Potted plants" and area > 8000:
-                return False
-            if plant_type == "Small plants" and (area < 500 or area > 20000):
-                return False
-            if plant_type == "Medium plants" and area < 8000:
-                return False
-            if plant_type == "Dense vegetation" and area < 25000:
-                return False
-        empty_soil = _get("emptySoil")
-        if empty_soil != "All" and crop is not None:
-            green_r = _region_hsv_ratio(crop, [25, 40, 40], [95, 255, 255])
-            brown_r = _region_hsv_ratio(crop, [8, 30, 40], [25, 180, 180])
-            if empty_soil == "Empty soil detected" and brown_r < 0.15:
-                return False
-            if empty_soil == "Fully covered" and green_r < 0.50:
-                return False
-        # Area estimate: pass through (requires GSD calculation)
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #  4. TREES
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "trees":
-        tree_health = _get("health")
+    if cat_lower == "trees":
+        tree_health = characteristics.get("health", "All")
         if tree_health != "All" and crop is not None:
             green_ratio = _region_hsv_ratio(crop, [25, 40, 40], [95, 255, 255])
             if tree_health == "Healthy Green" and green_ratio < 0.5:
                 return False
             if tree_health == "Diseased/Dry" and green_ratio > 0.45:
                 return False
-            if tree_health == "Deactivated canopy" and green_ratio > 0.25:
+        tree_type = characteristics.get("type", "All")
+        if tree_type == "Large trees" and crop is not None:
+            if crop.shape[0] * crop.shape[1] < 16000:
                 return False
-        tree_type = _get("type")
-        if tree_type != "All" and crop is not None:
-            area = crop.shape[0] * crop.shape[1]
-            if tree_type == "Large trees" and area < 16000:
-                return False
-            if tree_type == "Dry trees":
-                green_ratio = _region_hsv_ratio(crop, [25, 40, 40], [95, 255, 255])
-                if green_ratio > 0.45:
-                    return False
-            if tree_type == "Dense forest canopy" and area < 40000:
+        if tree_type == "Dry trees" and crop is not None:
+            green_ratio = _region_hsv_ratio(crop, [25, 40, 40], [95, 255, 255])
+            if green_ratio > 0.45:
                 return False
 
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #  5. ELECTRIC POLES
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "electric poles":
-        pole_type = _get("type")
-        if pole_type != "All" and crop is not None:
-            # Wood is brownish, metal is greyish, concrete is light grey
-            brown_r = _region_hsv_ratio(crop, [8, 30, 40], [25, 180, 180])
-            gray_r = _region_hsv_ratio(crop, [0, 0, 80], [180, 40, 200])
-            if pole_type == "Wooden Utility Pole" and brown_r < 0.10:
-                return False
-            if pole_type == "Metal Utility Pole" and gray_r < 0.15:
-                return False
-            if pole_type == "Reinforced Concrete Pole" and gray_r < 0.20:
-                return False
-        danger = _get("danger")
-        if danger != "All" and crop is not None:
-            h_crop, w_crop = crop.shape[:2]
-            aspect = h_crop / max(w_crop, 1)
-            # Vertical pole: aspect >> 1; leaning: lower aspect
-            if danger == "Stable Vertical" and aspect < 3.0:
-                return False
-            if danger == "Listing (Leaning >15°)" and (aspect > 5.0 or aspect < 1.5):
-                return False
-            if danger == "Severely Damaged / Snapped" and aspect > 3.0:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #  6. TRAFFIC LIGHTS
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "traffic lights":
-        state = _get("state")
-        if state != "All" and crop is not None:
-            mean_v = float(np.mean(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)[:, :, 2]))
-            if state == "Active Operating" and mean_v < 80:
-                return False
-            if state == "Inactive/Blank" and mean_v > 120:
-                return False
-        sig_color = _get("signalColor")
-        if sig_color != "All" and crop is not None:
-            red_r = _region_hsv_ratio(crop, [0, 100, 100], [10, 255, 255])
-            red_r2 = _region_hsv_ratio(crop, [160, 100, 100], [180, 255, 255])
-            yellow_r = _region_hsv_ratio(crop, [18, 100, 100], [35, 255, 255])
-            green_r = _region_hsv_ratio(crop, [40, 80, 80], [85, 255, 255])
-            if sig_color == "Red Signal" and (red_r + red_r2) < 0.05:
-                return False
-            if sig_color == "Yellow Signal" and yellow_r < 0.05:
-                return False
-            if sig_color == "Green Signal" and green_r < 0.05:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #  7. ROADS
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "roads":
-        road_type = _get("type")
-        if road_type != "All" and crop is not None:
-            gray_r = _region_hsv_ratio(crop, [0, 0, 60], [180, 40, 180])
-            brown_r = _region_hsv_ratio(crop, [8, 30, 40], [25, 180, 180])
-            if road_type == "Asphalt Paved" and gray_r < 0.20:
-                return False
-            if road_type == "Concrete Paved" and gray_r < 0.25:
-                return False
-            if road_type == "Unpaved Dirt Road" and brown_r < 0.15:
-                return False
-        road_state = _get("state")
-        if road_state != "All" and crop is not None:
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 50, 150)
-            edge_density = np.count_nonzero(edges) / max(1, edges.size)
-            if road_state == "Excellent" and edge_density > 0.10:
-                return False
-            if road_state == "Damaged surface" and edge_density < 0.06:
-                return False
-            if road_state == "Severe blockages" and edge_density < 0.12:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #  8. ROAD POTHOLES
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "road potholes":
-        severity = _get("severity")
-        if severity != "All" and crop is not None:
-            area = crop.shape[0] * crop.shape[1]
-            if severity == "Minor Crack" and area > 5000:
-                return False
-            if severity == "Moderate Pothole" and (area < 2000 or area > 30000):
-                return False
-            if severity == "Severe Pothole Crater" and area < 10000:
-                return False
-        moisture = _get("moisture")
-        if moisture != "All" and crop is not None:
-            blue_r = _region_hsv_ratio(crop, [90, 30, 30], [140, 255, 255])
-            if moisture == "Water-filled Pothole" and blue_r < 0.08:
-                return False
-            if moisture == "Dry Pothole" and blue_r > 0.15:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    #  9. WATER BODIES
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "water bodies":
-        wb_type = _get("type")
-        if wb_type != "All" and crop is not None:
-            area = crop.shape[0] * crop.shape[1]
-            if wb_type == "Puddle/Water Logging" and area > 30000:
-                return False
-            if wb_type == "Pond" and (area < 10000 or area > 200000):
-                return False
-            if wb_type == "Lake" and area < 80000:
-                return False
-            # Canal: elongated shape
-            if wb_type == "Canal/Drainage":
-                aspect = crop.shape[1] / max(crop.shape[0], 1)
-                if 0.4 < aspect < 2.5:  # not elongated enough
-                    return False
-        spread = _get("spread")
-        if spread != "All" and crop is not None:
-            area = crop.shape[0] * crop.shape[1]
-            if spread == "Minor localized" and area > 20000:
-                return False
-            if spread == "Significant spread" and (area < 10000 or area > 100000):
-                return False
-            if spread == "Widespread overflow" and area < 50000:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 10. BUILDINGS
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "buildings":
-        bldg_type = _get("type")
-        if bldg_type != "All" and crop is not None:
-            area = crop.shape[0] * crop.shape[1]
-            if bldg_type == "Residential Block" and area > 100000:
-                return False
-            if bldg_type == "Industrial Complex" and area < 40000:
-                return False
-            # Commercial: pass through (hard to distinguish from aerial)
-        bldg_state = _get("state")
-        if bldg_state != "All" and crop is not None:
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 40, 120)
-            edge_density = np.count_nonzero(edges) / max(1, edges.size)
-            # Damaged structures have more chaotic edge patterns
-            if bldg_state == "Undamaged Structure" and edge_density > 0.18:
-                return False
-            if bldg_state == "Cracked Walls" and edge_density < 0.08:
-                return False
-            if bldg_state == "Structural Collapse" and edge_density < 0.15:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 11. HOUSES
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "houses":
-        # Type: pass through (single vs multi from aerial is ambiguous)
-        roof = _get("roof")
-        if roof != "All" and crop is not None:
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 40, 120)
-            edge_density = np.count_nonzero(edges) / max(1, edges.size)
-            # Tin roof: high-frequency reflectance pattern
-            tin_r = _region_hsv_ratio(crop, [0, 0, 150], [180, 30, 255])
-            if roof == "Intact Roof" and edge_density > 0.15:
-                return False
-            if roof == "Damaged roof" and edge_density < 0.08:
-                return False
-            if roof == "Tin roof collapsed" and (tin_r < 0.10 or edge_density < 0.12):
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 12. PARKING AREAS
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "parking areas":
-        # Type: pass through (covered vs open hard from straight-down view)
-        utilization = _get("utilization")
-        if utilization != "All" and crop is not None:
-            # Parking occupancy: ratio of non-grey (vehicle-coloured) pixels
-            gray_r = _region_hsv_ratio(crop, [0, 0, 60], [180, 35, 200])
-            vehicle_ratio = 1.0 - gray_r
-            if utilization == "Empty slots (<10%)" and vehicle_ratio > 0.20:
-                return False
-            if utilization == "Moderate (10%-70%)" and (vehicle_ratio < 0.10 or vehicle_ratio > 0.70):
-                return False
-            if utilization == "Full slots (>70%)" and vehicle_ratio < 0.50:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 13. GARBAGE AREAS
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "garbage areas":
-        state = _get("state")
-        if state != "All" and crop is not None:
-            area = crop.shape[0] * crop.shape[1]
-            if state == "Under control" and area > 30000:
-                return False
-            if state == "Overflowing Trash" and area < 8000:
-                return False
-        composition = _get("composition")
-        if composition != "All" and crop is not None:
-            green_r = _region_hsv_ratio(crop, [25, 40, 40], [95, 255, 255])
-            blue_r = _region_hsv_ratio(crop, [90, 40, 40], [140, 255, 255])
-            if composition == "Organic waste" and green_r < 0.08:
-                return False
-            if composition == "Recyclable materials" and blue_r < 0.05:
-                return False
-            # Hazardous: pass through (impossible from visual alone)
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 14. CONSTRUCTION ZONES
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "construction zones":
-        stage = _get("stage")
-        if stage != "All" and crop is not None:
-            brown_r = _region_hsv_ratio(crop, [8, 40, 60], [28, 200, 220])
-            gray_r = _region_hsv_ratio(crop, [0, 0, 80], [180, 40, 200])
-            edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 40, 120)
-            edge_density = np.count_nonzero(edges) / max(1, edges.size)
-            if stage == "Excavation phase" and brown_r < 0.15:
-                return False
-            if stage == "Structural framing" and edge_density < 0.08:
-                return False
-            if stage == "Finishing work" and gray_r < 0.15:
-                return False
-        status = _get("status")
-        if status != "All" and crop is not None:
-            yellow_r = _region_hsv_ratio(crop, [18, 100, 100], [35, 255, 255])
-            if status == "Active working" and yellow_r < 0.03:
-                return False
-            if status == "Inactive/Abandoned" and yellow_r > 0.10:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 15. AGRICULTURAL LAND
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "agricultural land":
-        status = _get("status")
-        if status != "All" and crop is not None:
-            green_r = _region_hsv_ratio(crop, [30, 40, 40], [90, 255, 200])
-            brown_r = _region_hsv_ratio(crop, [8, 30, 40], [25, 180, 180])
-            if status == "Planted/Green Crop fields" and green_r < 0.25:
-                return False
-            if status == "Fallow/Bare land" and brown_r < 0.20:
-                return False
-            if status == "Harvested state" and (green_r > 0.40 or brown_r < 0.10):
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 16. ANIMALS
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "animals":
-        animal_type = _get("type")
-        if animal_type != "All" and cls_name is not None:
-            livestock = {"cow", "sheep", "horse"}
-            wild = {"elephant", "bear", "zebra", "giraffe"}
-            strays = {"dog", "cat"}
-            if animal_type == "Livestock (Cows/Goats)" and cls_name not in livestock:
-                return False
-            if animal_type == "Wild animals" and cls_name not in wild:
-                return False
-            if animal_type == "Stray dogs/cats" and cls_name not in strays:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 17. SOLAR PANELS
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "solar panels":
-        sp_type = _get("type")
-        if sp_type != "All" and crop is not None:
-            # Rooftop panels are smaller, ground mounts are larger arrays
-            area = crop.shape[0] * crop.shape[1]
-            if sp_type == "Rooftop Mount" and area > 80000:
-                return False
-            if sp_type == "Ground Mount Grid" and area < 20000:
-                return False
-        sp_state = _get("state")
-        if sp_state != "All" and crop is not None:
-            # Clean panels have uniform dark blue reflectance
-            blue_r = _region_hsv_ratio(crop, [100, 40, 20], [140, 255, 120])
-            mean_v = float(np.mean(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)[:, :, 2]))
-            if sp_state == "Clean & Active" and blue_r < 0.20:
-                return False
-            if sp_state == "Dust covered" and mean_v > 100:
-                return False
-            if sp_state == "Damaged Panel":
-                edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 50, 150)
-                if np.count_nonzero(edges) / max(1, edges.size) < 0.10:
-                    return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 18. BRIDGES
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "bridges":
-        # Type: pass through (beam vs arch vs suspension is ML-level classification)
-        integrity = _get("integrity")
-        if integrity != "All" and crop is not None:
-            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 40, 120)
-            edge_density = np.count_nonzero(edges) / max(1, edges.size)
-            if integrity == "Intact Structure" and edge_density > 0.18:
-                return False
-            if integrity == "Cracked Piers" and edge_density < 0.06:
-                return False
-            if integrity == "Severely Damaged" and edge_density < 0.12:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 19. RAILWAY TRACKS
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "railway tracks":
-        # Status: pass through (active vs siding not distinguishable from aerial)
-        obstruction = _get("obstruction")
-        if obstruction != "All" and crop is not None:
-            # Obstructed tracks have more non-rail-colour pixels
-            gray_r = _region_hsv_ratio(crop, [0, 0, 40], [180, 50, 160])
-            if obstruction == "Clear Track" and gray_r < 0.30:
-                return False
-            if obstruction == "Obstruction detected" and gray_r > 0.60:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 20. FIRE & SMOKE
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "fire & smoke":
-        intensity = _get("intensity")
-        if intensity != "All" and crop is not None:
-            fire_r = _region_hsv_ratio(crop, [0, 100, 150], [25, 255, 255])
-            smoke_r = _region_hsv_ratio(crop, [0, 0, 160], [180, 40, 255])
-            total_r = fire_r + smoke_r
-            if intensity == "Light smoke" and (fire_r > 0.05 or smoke_r < 0.03):
-                return False
-            if intensity == "Dense smoke" and smoke_r < 0.10:
-                return False
-            if intensity == "Active open fire" and fire_r < 0.08:
-                return False
-            if intensity == "Severe wildfire" and total_r < 0.25:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 21. FLOOD WATER
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "flood water":
-        level = _get("level")
-        if level != "All" and crop is not None:
-            area = crop.shape[0] * crop.shape[1]
-            blue_r = _region_hsv_ratio(crop, [90, 30, 30], [140, 255, 255])
-            if level == "Minor puddle" and area > 15000:
-                return False
-            if level == "Moderate overflow" and (area < 5000 or area > 80000):
-                return False
-            if level == "Severe deep flood" and area < 30000:
-                return False
-        hazard = _get("hazard")
-        if hazard != "All" and crop is not None:
-            area = crop.shape[0] * crop.shape[1]
-            blue_r = _region_hsv_ratio(crop, [90, 30, 30], [140, 255, 255])
-            if hazard == "Emergency evacuation required" and (area < 20000 or blue_r < 0.15):
-                return False
-            if hazard == "Normal vigilance" and area > 60000:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 22. SHOPS
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "shops":
-        state = _get("state")
-        if state != "All" and crop is not None:
-            mean_v = float(np.mean(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)[:, :, 2]))
-            edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 40, 120)
-            edge_density = np.count_nonzero(edges) / max(1, edges.size)
-            if state == "Open for business" and mean_v < 80:
-                return False
-            if state == "Closed" and mean_v > 150:
-                return False
-            if state == "Damaged facade" and edge_density < 0.10:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 23. WAREHOUSES
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "warehouses":
-        state = _get("state")
-        if state != "All" and crop is not None:
-            mean_v = float(np.mean(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)[:, :, 2]))
-            edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 40, 120)
-            edge_density = np.count_nonzero(edges) / max(1, edges.size)
-            if state == "Active facility" and mean_v < 60:
-                return False
-            if state == "Inactive facility" and mean_v > 140:
-                return False
-            if state == "Damaged roof" and edge_density < 0.10:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 24. PIPELINES
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "pipelines":
-        # Type: above/below ground — below ground is not visible from aerial
-        pipe_type = _get("type")
-        if pipe_type == "Below ground pipeline":
-            return False  # cannot detect underground from drone
-        safety_check = _get("safety")
-        if safety_check != "All" and crop is not None:
-            # Leakage: look for discolouration / wet patches around pipeline
-            brown_r = _region_hsv_ratio(crop, [8, 30, 40], [25, 180, 180])
-            blue_r = _region_hsv_ratio(crop, [90, 30, 30], [140, 255, 255])
-            if safety_check == "Secure/Intact" and blue_r > 0.10:
-                return False
-            if safety_check == "Leakage suspected" and blue_r < 0.05:
-                return False
-
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # 25. STREET LIGHTS
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    elif cat_lower == "street lights":
-        state = _get("state")
-        if state != "All" and crop is not None:
-            mean_v = float(np.mean(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)[:, :, 2]))
-            edges = cv2.Canny(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), 50, 150)
-            edge_density = np.count_nonzero(edges) / max(1, edges.size)
-            if state == "Active glowing" and mean_v < 100:
-                return False
-            if state == "Inactive/Dark" and mean_v > 130:
-                return False
-            if state == "Physically damaged" and edge_density < 0.10:
-                return False
+    if cat_lower == "buildings" and characteristics.get("type") != "All":
+        # No reliable building-type inference from default YOLO; keep broad coverage.
+        pass
 
     return True
 
@@ -881,7 +312,7 @@ def _detect_heuristic(
     analysis_id: int,
     cat_id: int,
     chars_str: str,
-    seen_track_ids: dict,
+    confirmed_ids: set,
     obj_screenshots: dict,
     batch: list,
     settings_ref,
@@ -1255,9 +686,9 @@ def _detect_heuristic(
             round((y1 + y2) / 2 / 25),
             label
         )
-        if spatial_key in seen_track_ids:
+        if spatial_key in confirmed_ids:
             continue
-        seen_track_ids[spatial_key] = timestamp_sec
+        confirmed_ids.add(spatial_key)
 
         # Save screenshot
         try:
@@ -1481,9 +912,6 @@ def run_mapping_analysis(
         obj_screenshots: dict = {}
         first_seen_at: dict  = {}  # obj_key -> timestamp_sec
 
-        # Heuristic dedup dict — separate from YOLO confirmed_ids
-        heuristic_seen: dict = {}
-
         batch: list[dict] = []
         BATCH_SIZE = 50
         raw_detection_count = 0
@@ -1546,7 +974,7 @@ def run_mapping_analysis(
                     _detect_heuristic(
                         enhanced, target_cat, frame_idx, timestamp_sec,
                         analysis_id, cat_id, chars_str,
-                        heuristic_seen, obj_screenshots, batch, settings
+                        confirmed_ids, obj_screenshots, batch, settings
                     )
                 return  # heuristic-only, skip YOLO for this category
 
@@ -1704,33 +1132,39 @@ def run_mapping_analysis(
             flush_batch()
             _write_progress(db, analysis_id, 100, len(confirmed_ids))
         else:
-            # Use seek-based iteration to skip decoding of unwanted frames
-            sampled_indices = range(0, total_frames, frame_interval)
-            for frame_idx in sampled_indices:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            # Sequential frame read — required for ByteTrack persist=True to maintain track IDs.
+            # YOLO categories: run tracker on EVERY frame for accurate unique counts.
+            # Heuristic categories: sample every frame_interval (no ByteTrack needed).
+            uses_bytetrack = cat_key not in HEURISTIC_CATEGORIES
+            frame_idx = 0
+            last_progress = 0
+
+            while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
 
-                # Check if cancelled by user
+                if uses_bytetrack or (frame_idx % frame_interval == 0):
+                    process_frame(frame, frame_idx, frame_idx / fps)
+
                 from ..api.v1.analysis import is_cancelled
                 if is_cancelled(analysis_id):
-                    logger.info(f"[AI] Analysis {analysis_id} cancelled by user at frame {frame_idx}")
+                    logger.info(f"[AI] Analysis {analysis_id} cancelled at frame {frame_idx}")
                     cap.release()
                     flush_batch()
                     return {"analysis_id": analysis_id, "cancelled": True}
 
-                process_frame(frame, frame_idx, frame_idx / fps)
-
-                if total_frames > 0:
+                if total_frames > 0 and frame_idx % frame_interval == 0:
                     pct = min(99, int((frame_idx / total_frames) * 100))
                     if pct >= last_progress + 5:
                         flush_batch()
                         _write_progress(db, analysis_id, pct, len(confirmed_ids))
                         last_progress = pct
                         logger.info(
-                            f"[AI] {pct}% | {len(confirmed_ids)} unique objects tracked"
+                            f"[AI] {pct}% | {len(confirmed_ids)} unique objects (ByteTrack)"
                         )
+
+                frame_idx += 1
 
             cap.release()
             flush_batch()

@@ -9,6 +9,7 @@ import {
 import FileDropzone from '../components/ui/FileDropzone'
 import GlassCard from '../components/ui/GlassCard'
 import NeonButton from '../components/ui/NeonButton'
+import { fetchJson } from '../lib/api'
 
 // Dropdown configuration options - ALL 25 Predefined Categories from complete Master Prompt
 const categoriesConfig = {
@@ -419,8 +420,7 @@ export default function MappingPage() {
     const saved = localStorage.getItem('skyrecon_mapping_job')
     if (!saved) return
     const { id, startTime } = JSON.parse(saved)
-    fetch(`/api/v1/analysis/${id}/status`)
-      .then(r => r.json())
+    fetchJson(`/api/v1/analysis/${id}/status`)
       .then(data => {
         if (data.status === 'processing') {
           setAnalysisId(id)
@@ -432,8 +432,7 @@ export default function MappingPage() {
         } else if (data.status === 'completed') {
           setAnalysisId(id)
           setAnalysisProgress(100)
-          fetch(`/api/v1/analysis/${id}/summary`)
-            .then(r => r.json())
+          fetchJson(`/api/v1/analysis/${id}/summary`)
             .then(summary => {
               setRealResults(summary)
               setShowReport(true)
@@ -461,9 +460,9 @@ export default function MappingPage() {
     if (pollRef.current) clearInterval(pollRef.current)
     pollRef.current = setInterval(async () => {
       try {
-        const res = await fetch(`/api/v1/analysis/${aid}/status`)
-        const data = await res.json()
-        if (typeof data.progress === 'number' && data.progress > 0) {
+        try {
+          const data = await fetchJson(`/api/v1/analysis/${aid}/status`)
+          if (typeof data.progress === 'number' && data.progress > 0) {
           setAnalysisProgress(data.progress)
           if (startTime && data.progress > 5) {
             const elapsed = (Date.now() - startTime) / 1000
@@ -477,20 +476,23 @@ export default function MappingPage() {
           setTerminalLogs(prev => {
             const last = prev[prev.length - 1] || ''
             if (last.includes('detected so far')) prev = prev.slice(0, -1)
-            return [...prev, `[AI] ${data.total_objects} objects detected so far... (${data.progress ?? '?'}%)`]
+            return [...prev, `[AI] ${data.total_objects} unique objects tracked (ByteTrack)... (${data.progress ?? '?'}%)`]
           })
         } else if (data.status === 'completed') {
           clearInterval(pollRef.current)
           localStorage.removeItem('skyrecon_mapping_job')
           setAnalysisProgress(100)
           setTerminalLogs(prev => [...prev,
-            `[SYSTEM] Analysis complete. ${data.total_objects} detections in ${data.processing_time?.toFixed(1)}s.`
+            `[SYSTEM] Analysis complete. ${data.total_objects} unique objects (ByteTrack) in ${data.processing_time?.toFixed(1)}s.`
           ])
-          const sumRes = await fetch(`/api/v1/analysis/${aid}/summary`)
-          const summary = await sumRes.json()
-          setRealResults(summary)
-          setAnalyzing(false)
-          setShowReport(true)
+          try {
+            const summary = await fetchJson(`/api/v1/analysis/${aid}/summary`)
+            setRealResults(summary)
+            setAnalyzing(false)
+            setShowReport(true)
+          } catch (e) {
+            setApiError(`Failed to load results: ${e.message}`)
+          }
         } else if (data.status === 'failed') {
           clearInterval(pollRef.current)
           localStorage.removeItem('skyrecon_mapping_job')
@@ -533,9 +535,7 @@ export default function MappingPage() {
       formData.append('characteristics', JSON.stringify(characteristics))
       formData.append('custom_query', customPrompt)
 
-      const res = await fetch('/api/v1/analysis/upload', { method: 'POST', body: formData })
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
-      const data = await res.json()
+      const data = await fetchJson('/api/v1/analysis/upload', { method: 'POST', body: formData })
       setAnalysisId(data.id)
       setAnalysisProgress(15)
       // Persist job to localStorage so navigating away doesn't lose it
@@ -571,18 +571,20 @@ export default function MappingPage() {
   const handleExportReal = async (fmt) => {
     if (!analysisId) return
     try {
-      const res = await fetch(
+      const data = await fetchJson(
         `/api/v1/analysis/${analysisId}/report?report_type=mapping&fmt=${fmt}`,
         { method: 'POST' }
       )
-      const data = await res.json()
       const rid = data.report_id
       const poll = setInterval(async () => {
-        const sr = await fetch(`/api/v1/analysis/report/${rid}/status`)
-        const sd = await sr.json()
-        if (sd.status === 'ready') {
-          clearInterval(poll)
-          window.open(`/api/v1/analysis/report/${rid}/download`, '_blank')
+        try {
+          const sd = await fetchJson(`/api/v1/analysis/report/${rid}/status`)
+          if (sd.status === 'ready') {
+            clearInterval(poll)
+            window.open(`/api/v1/analysis/report/${rid}/download`, '_blank')
+          }
+        } catch (_) {
+          // keep polling until ready or timeout
         }
       }, 2000)
     } catch (e) {
@@ -912,7 +914,7 @@ Report generated by SkyRecon AI Drone Intelligence Software.`
                           <div className="grid grid-cols-3 gap-3 mb-4">
                             <div className="bg-white/[0.01] border border-white/5 rounded-xl p-3 text-center">
                               <p className="text-xl font-bold text-white">{realResults?.total_detections ?? 0}</p>
-                              <p className="text-[9px] text-[var(--text-muted)] font-mono mt-0.5">DETECTIONS</p>
+                              <p className="text-[9px] text-[var(--text-muted)] font-mono mt-0.5">UNIQUE (ByteTrack)</p>
                             </div>
                             <div className="bg-white/[0.01] border border-white/5 rounded-xl p-3 text-center">
                               <p className="text-xl font-bold text-cyan-400">{realResults?.coverage?.coverage_percent ?? 0}%</p>
@@ -942,7 +944,7 @@ Report generated by SkyRecon AI Drone Intelligence Software.`
                           <div className="flex gap-3 items-start bg-green-500/[0.02] border-l-2 border-l-green-500 rounded-r-xl p-3">
                             <Info size={14} className="text-green-400 flex-shrink-0 mt-0.5" />
                             <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
-                              <strong className="text-white">{realResults?.total_detections ?? 0}</strong> objects across{' '}
+                              <strong className="text-white">{realResults?.total_detections ?? 0}</strong> unique objects (ByteTrack) across{' '}
                               <strong className="text-white">{Object.keys(realResults?.category_breakdown ?? {}).length}</strong> categories.
                               {' '}{realResults?.coverage?.total_area_sqm ?? 0} m² covered.
                               {' '}{realResults?.coverage?.empty_area_sqm ?? 0} m² available.

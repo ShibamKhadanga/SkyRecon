@@ -4,7 +4,7 @@ import {
   Search, Video, X, Clock, Upload,
   AlertCircle, CheckCircle, Loader2, Image as ImageIcon,
   Target, ZoomIn, Download, ScanLine, Wifi, WifiOff, RefreshCw,
-  Usb, ChevronDown, StopCircle
+  Usb, ChevronDown, StopCircle, User, ScanFace
 } from 'lucide-react'
 import WeatherBar from '../components/ui/WeatherBar'
 
@@ -286,7 +286,99 @@ function LivePanel({ mode, onStreamReady, videoRef: externalVideoRef }) {
   )
 }
 
-// ── Capture a frame from a video element or file at a given time ─────────────
+// ── Facial attribute options ──────────────────────────────────────────────────
+const FACIAL_ATTRIBUTES = {
+  gender: {
+    label: 'Gender',
+    options: [
+      { value: '', label: 'Any' },
+      { value: 'male', label: 'Male' },
+      { value: 'female', label: 'Female' },
+    ],
+  },
+  age_group: {
+    label: 'Age Group',
+    options: [
+      { value: '', label: 'Any' },
+      { value: 'child', label: 'Child' },
+      { value: 'teen', label: 'Teenager' },
+      { value: 'adult', label: 'Adult' },
+      { value: 'elderly', label: 'Elderly' },
+    ],
+  },
+  hair_color: {
+    label: 'Hair Color',
+    options: [
+      { value: '', label: 'Any' },
+      { value: 'black', label: 'Black' },
+      { value: 'brown', label: 'Brown' },
+      { value: 'blonde', label: 'Blonde' },
+      { value: 'gray', label: 'Gray / White' },
+      { value: 'red', label: 'Red' },
+    ],
+  },
+  facial_hair: {
+    label: 'Facial Hair',
+    options: [
+      { value: '', label: 'Any' },
+      { value: 'none', label: 'Clean-shaven' },
+      { value: 'beard', label: 'Beard' },
+      { value: 'mustache', label: 'Mustache' },
+    ],
+  },
+  glasses: {
+    label: 'Glasses',
+    options: [
+      { value: '', label: 'Any' },
+      { value: 'yes', label: 'Wearing glasses' },
+      { value: 'no', label: 'No glasses' },
+    ],
+  },
+  skin_tone: {
+    label: 'Skin Tone',
+    options: [
+      { value: '', label: 'Any' },
+      { value: 'light', label: 'Light' },
+      { value: 'medium', label: 'Medium' },
+      { value: 'dark', label: 'Dark' },
+    ],
+  },
+  clothing_color: {
+    label: 'Clothing Color',
+    options: [
+      { value: '', label: 'Any' },
+      { value: 'black', label: 'Black' },
+      { value: 'white', label: 'White' },
+      { value: 'red', label: 'Red' },
+      { value: 'blue', label: 'Blue' },
+      { value: 'green', label: 'Green' },
+      { value: 'yellow', label: 'Yellow' },
+    ],
+  },
+}
+
+function AttributeSelect({ attrKey, config, value, onChange, disabled }) {
+  return (
+    <div>
+      <label className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider block mb-1">
+        {config.label}
+      </label>
+      <select
+        value={value}
+        onChange={e => onChange(attrKey, e.target.value)}
+        disabled={disabled}
+        className="w-full px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white focus:outline-none focus:border-green-500/40 font-mono appearance-none"
+      >
+        {config.options.map(opt => (
+          <option key={opt.value || 'any'} value={opt.value} style={{ background: '#0a0a0a' }}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 function captureFrame(videoEl) {
   try {
     const canvas = document.createElement('canvas')
@@ -364,6 +456,11 @@ export default function FindPage() {
   const [videoFile, setVideoFile]     = useState(null)
   const [videoPreview, setVideoPreview] = useState(null)
   const [videoMode, setVideoMode]     = useState('upload') // 'upload' | 'live' | 'usb'
+  const [searchMode, setSearchMode]   = useState('facial') // 'visual' | 'facial'
+  const [facialAttrs, setFacialAttrs] = useState({
+    gender: '', age_group: '', hair_color: '', facial_hair: '',
+    glasses: '', skin_tone: '', clothing_color: '',
+  })
   const [liveUrl, setLiveUrl]         = useState(null)
   const [searching, setSearching]     = useState(false)
   const [progress, setProgress]       = useState(0)
@@ -389,10 +486,23 @@ export default function FindPage() {
   const clearVideo  = () => { setVideoFile(null);  setVideoPreview(null)  }
   const addLog = msg => setProcessingLog(prev => [...prev, { time: new Date().toLocaleTimeString(), msg }])
 
-  const canSearch = (videoMode === 'upload' ? (targetFile && videoFile) : (targetFile && liveUrl)) && !searching
+  const hasFacialFilters = Object.values(facialAttrs).some(v => v && v !== '')
+  const canSearch = (
+    videoMode === 'upload'
+      ? (videoFile && (searchMode === 'visual' ? targetFile : (targetFile || hasFacialFilters)))
+      : (liveUrl && (searchMode === 'visual' ? targetFile : (targetFile || hasFacialFilters)))
+  ) && !searching
+
+  const handleAttrChange = (key, value) => {
+    setFacialAttrs(prev => ({ ...prev, [key]: value }))
+    setMatches([]); setSearchDone(false)
+  }
 
   const startSearch = async () => {
-    if (!targetFile) { setError('Upload a target image first.'); return }
+    if (searchMode === 'visual' && !targetFile) { setError('Upload a target image first.'); return }
+    if (searchMode === 'facial' && !targetFile && !hasFacialFilters) {
+      setError('Select facial attributes or upload a reference face photo.'); return
+    }
     if (videoMode === 'upload' && !videoFile) { setError('Upload a drone video or switch to Live mode.'); return }
     if ((videoMode === 'live' || videoMode === 'usb') && !liveUrl) { setError('Connect to a live stream first.'); return }
 
@@ -407,19 +517,30 @@ export default function FindPage() {
       fakeP = Math.min(fakeP + 1, 88)
       setProgress(fakeP)
       if (fakeP < 15) setProgressMsg('Loading models...')
-      else if (fakeP < 30) setProgressMsg('Encoding target object...')
-      else if (fakeP < 60) setProgressMsg('Scanning video frames...')
-      else setProgressMsg('Comparing features...')
+      else if (fakeP < 30) setProgressMsg(searchMode === 'facial' ? 'Encoding facial attributes...' : 'Encoding target object...')
+      else if (fakeP < 60) setProgressMsg('Detecting persons in frames...')
+      else setProgressMsg(searchMode === 'facial' ? 'Matching facial attributes...' : 'Comparing features...')
     }, 600)
 
     try {
       addLog('Initializing AI search engine...')
-      addLog('Extracting target features with CLIP...')
+      if (searchMode === 'facial') {
+        addLog('Facial attribute mode — YOLO person detect + CLIP attribute matching')
+        if (hasFacialFilters) {
+          addLog(`Filters: ${Object.entries(facialAttrs).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(', ')}`)
+        }
+      } else {
+        addLog('Extracting target features with CLIP...')
+      }
       addLog(videoMode === 'upload' ? 'Scanning video frames...' : 'Scanning live frames...')
       addLog('Sending to backend AI pipeline...')
 
       const formData = new FormData()
-      formData.append('target_image', targetFile)
+      formData.append('search_mode', searchMode)
+      formData.append('facial_attributes', JSON.stringify(
+        Object.fromEntries(Object.entries(facialAttrs).filter(([, v]) => v))
+      ))
+      if (targetFile) formData.append('target_image', targetFile)
       if (videoMode === 'upload') formData.append('video', videoFile)
       else formData.append('live_url', liveUrl)
 
@@ -473,23 +594,41 @@ export default function FindPage() {
             <Target size={22} className="text-green-400" /> Object Finder
           </h1>
           <p className="text-sm text-[var(--text-muted)]">
-            Upload a target image — AI finds every appearance in uploaded or live drone footage
+            Search by facial attributes or visual match — finds every appearance in drone footage
           </p>
         </div>
-        {canSearch && (
-          <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-            onClick={startSearch}
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm font-semibold hover:bg-green-500/20 transition-colors">
-            <Search size={15} /> Start Search
-          </motion.button>
-        )}
-        {searching && (
-          <button
-            onClick={() => abortRef.current?.abort()}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm font-semibold hover:bg-red-500/20 transition-colors">
-            <StopCircle size={15} /> Cancel
-          </button>
-        )}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-1 p-0.5 rounded-lg bg-white/5 border border-white/10">
+            {[
+              { mode: 'facial', icon: ScanFace, label: 'Facial Attributes' },
+              { mode: 'visual', icon: ImageIcon, label: 'Visual Match' },
+            ].map(({ mode, icon: Icon, label }) => (
+              <button key={mode}
+                onClick={() => { setSearchMode(mode); setMatches([]); setSearchDone(false) }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[10px] font-semibold transition-colors ${
+                  searchMode === mode
+                    ? 'bg-green-500/20 text-green-400 border border-green-500/20'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                }`}>
+                <Icon size={11} /> {label}
+              </button>
+            ))}
+          </div>
+          {canSearch && (
+            <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+              onClick={startSearch}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-green-500/10 border border-green-500/20 text-green-400 text-sm font-semibold hover:bg-green-500/20 transition-colors">
+              <Search size={15} /> Start Search
+            </motion.button>
+          )}
+          {searching && (
+            <button
+              onClick={() => abortRef.current?.abort()}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm font-semibold hover:bg-red-500/20 transition-colors">
+              <StopCircle size={15} /> Cancel
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Weather Bar */}
@@ -510,22 +649,52 @@ export default function FindPage() {
       {/* 4-Quadrant Grid */}
       <div className="grid grid-cols-2 grid-rows-2 gap-3" style={{ height: 'calc(100vh - 240px)', minHeight: 480 }}>
 
-        {/* TOP LEFT — Target Image */}
+        {/* TOP LEFT — Target / Facial Attributes */}
         <div className="flex flex-col rounded-2xl border border-white/5 bg-white/[0.01] overflow-hidden">
           <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/5 flex-shrink-0">
             <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
-            <span className="text-xs font-mono font-semibold text-[var(--text-secondary)] uppercase tracking-wider">Target Object</span>
+            <span className="text-xs font-mono font-semibold text-[var(--text-secondary)] uppercase tracking-wider">
+              {searchMode === 'facial' ? 'Facial Attributes' : 'Target Object'}
+            </span>
             {targetFile && (
               <span className="ml-auto text-[10px] font-mono text-green-400 bg-green-500/10 px-2 py-0.5 rounded-full border border-green-500/20">
                 {targetFile.name.slice(0, 20)}
               </span>
             )}
           </div>
-          <div className="flex-1 p-3 min-h-0">
-            <DropZone accept="image/*" label="Upload Target Photo"
-              subLabel="Person, vehicle, or any object to find"
-              icon={ImageIcon} onFile={handleTargetFile}
-              preview={targetPreview} onClear={clearTarget} disabled={searching} />
+          <div className="flex-1 p-3 min-h-0 overflow-y-auto">
+            {searchMode === 'facial' ? (
+              <div className="flex flex-col gap-3 h-full">
+                <div className="grid grid-cols-2 gap-2">
+                  {Object.entries(FACIAL_ATTRIBUTES).map(([key, config]) => (
+                    <AttributeSelect
+                      key={key}
+                      attrKey={key}
+                      config={config}
+                      value={facialAttrs[key]}
+                      onChange={handleAttrChange}
+                      disabled={searching}
+                    />
+                  ))}
+                </div>
+                <div className="border-t border-white/5 pt-2">
+                  <p className="text-[10px] font-mono text-[var(--text-muted)] mb-2 uppercase tracking-wider">
+                    Reference Face (optional)
+                  </p>
+                  <div className="h-28">
+                    <DropZone accept="image/*" label="Upload reference face"
+                      subLabel="Improves match accuracy when combined with attributes"
+                      icon={User} onFile={handleTargetFile}
+                      preview={targetPreview} onClear={clearTarget} disabled={searching} />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <DropZone accept="image/*" label="Upload Target Photo"
+                subLabel="Person, vehicle, or any object to find"
+                icon={ImageIcon} onFile={handleTargetFile}
+                preview={targetPreview} onClear={clearTarget} disabled={searching} />
+            )}
           </div>
         </div>
 
@@ -586,7 +755,9 @@ export default function FindPage() {
                   <ScanLine size={22} className="text-[var(--text-muted)]" />
                 </div>
                 <p className="text-xs text-[var(--text-muted)] font-mono">
-                  Upload target + video<br />then click Start Search
+                  {searchMode === 'facial'
+                    ? <>Set facial attributes + upload video<br />then click Start Search</>
+                    : <>Upload target + video<br />then click Start Search</>}
                 </p>
               </div>
             ) : (

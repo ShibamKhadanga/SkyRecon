@@ -9,6 +9,7 @@ import {
 import FileDropzone from '../components/ui/FileDropzone'
 import GlassCard from '../components/ui/GlassCard'
 import NeonButton from '../components/ui/NeonButton'
+import { fetchJson } from '../lib/api'
 
 // Severity level style helper
 const getSeverityStyle = (level) => {
@@ -106,8 +107,7 @@ export default function DisasterPage() {
     const saved = localStorage.getItem('skyrecon_disaster_job')
     if (!saved) return
     const { id } = JSON.parse(saved)
-    fetch(`/api/v1/analysis/${id}/status`)
-      .then(r => r.json())
+    fetchJson(`/api/v1/analysis/${id}/status`)
       .then(sd => {
         if (sd.status === 'processing') {
           setAnalysisId(id)
@@ -117,8 +117,7 @@ export default function DisasterPage() {
         } else if (sd.status === 'completed') {
           setAnalysisId(id)
           setScanProgress(100)
-          fetch(`/api/v1/analysis/${id}/disasters`)
-            .then(r => r.json())
+          fetchJson(`/api/v1/analysis/${id}/disasters`)
             .then(events => {
               setRealEvents(events)
               setShowReport(true)
@@ -136,23 +135,27 @@ export default function DisasterPage() {
     if (pollRef.current) clearInterval(pollRef.current)
     pollRef.current = setInterval(async () => {
       try {
-        const sr = await fetch(`/api/v1/analysis/${id}/status`)
-        const sd = await sr.json()
+        const sd = await fetchJson(`/api/v1/analysis/${id}/status`)
         if (typeof sd.progress === 'number' && sd.progress > 0) {
           setScanProgress(sd.progress)
         } else if (sd.status === 'processing') {
           setScanProgress(prev => Math.min(prev + 2, 90))
         }
+
         if (sd.status === 'completed') {
           clearInterval(pollRef.current)
           localStorage.removeItem('skyrecon_disaster_job')
           setScanProgress(100)
-          const er = await fetch(`/api/v1/analysis/${id}/disasters`)
-          const events = await er.json()
-          setRealEvents(events)
-          setScanning(false)
-          setShowReport(true)
-          setTimeout(() => triggerVoiceSpeech(events), 300)
+          try {
+            const events = await fetchJson(`/api/v1/analysis/${id}/disasters`)
+            setRealEvents(events)
+            setScanning(false)
+            setShowReport(true)
+            setTimeout(() => triggerVoiceSpeech(events), 300)
+          } catch (e) {
+            setApiError(`Failed to load disaster results: ${e.message}`)
+            setScanning(false)
+          }
         } else if (sd.status === 'failed') {
           clearInterval(pollRef.current)
           localStorage.removeItem('skyrecon_disaster_job')
@@ -179,9 +182,7 @@ export default function DisasterPage() {
       formData.append('analysis_type', 'disaster')
       formData.append('detection_mode', 'standard')
 
-      const res = await fetch('/api/v1/analysis/upload', { method: 'POST', body: formData })
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
-      const data = await res.json()
+      const data = await fetchJson('/api/v1/analysis/upload', { method: 'POST', body: formData })
       setAnalysisId(data.id)
       setScanProgress(15)
       // Persist so navigating away doesn't lose the job
@@ -220,18 +221,20 @@ export default function DisasterPage() {
   const handleExport = async (format) => {
     if (!analysisId) return
     try {
-      const res = await fetch(
+      const data = await fetchJson(
         `/api/v1/analysis/${analysisId}/report?report_type=disaster&fmt=${format}`,
         { method: 'POST' }
       )
-      const data = await res.json()
       const rid = data.report_id
       const poll = setInterval(async () => {
-        const sr = await fetch(`/api/v1/analysis/report/${rid}/status`)
-        const sd = await sr.json()
-        if (sd.status === 'ready') {
-          clearInterval(poll)
-          window.open(`/api/v1/analysis/report/${rid}/download`, '_blank')
+        try {
+          const sd = await fetchJson(`/api/v1/analysis/report/${rid}/status`)
+          if (sd.status === 'ready') {
+            clearInterval(poll)
+            window.open(`/api/v1/analysis/report/${rid}/download`, '_blank')
+          }
+        } catch (_) {
+          // keep polling until ready or timeout
         }
       }, 2000)
     } catch (e) {
