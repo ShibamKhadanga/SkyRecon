@@ -1,7 +1,6 @@
 from huggingface_hub import hf_hub_download
 import shutil
 
-# --- Buildings Model (keremberke - satellite building segmentation) ---
 print("Downloading buildings model...")
 path = hf_hub_download(
     repo_id="keremberke/yolov8s-building-segmentation",
@@ -10,7 +9,6 @@ path = hf_hub_download(
 shutil.copy(path, "skyrecon_buildings.pt")
 print("✅ skyrecon_buildings.pt saved!")
 
-# --- Solar Panels Model ---
 print("Downloading solar panels model...")
 path2 = hf_hub_download(
     repo_id="finloop/yolov8s-seg-solar-panels",

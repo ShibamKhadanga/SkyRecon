@@ -45,6 +45,18 @@ def startup():
     init_db()
     print("[API] SkyRecon API started")
     print(f"[API] Docs: http://localhost:7860/api/docs")
+    try:
+        from .ai.video_processor import _get_model
+        _get_model(settings.YOLO_MODEL)
+        print(f"[API] Base model '{settings.YOLO_MODEL}' pre-loaded.")
+    except Exception as e:
+        print(f"[API] Model pre-load skipped: {e}")
+    try:
+        from .ai.video_processor import _get_model
+        _get_model(settings.YOLO_MODEL)
+        print(f"[API] Base model '{settings.YOLO_MODEL}' pre-loaded.")
+    except Exception as e:
+        print(f"[API] Model pre-load skipped: {e}")
 
 
 @app.get("/api/health")

@@ -47,13 +47,13 @@ Four core modules:
 - **Mapping & Survey** — detect 25 categories from aerial footage using specialized fine-tuned models. Get real unique object counts via ByteTrack, area coverage in m², one cropped screenshot per unique object with timestamp, and downloadable PDF/DOCX reports.
 - **Disaster Response** — scan footage for floods, fire, structural damage, fallen poles. Each event gets severity 1-5, a screenshot from the exact video frame, resource estimates, and an actionable report.
 - **Live Drone Feed** — real-time video streaming with telemetry HUD overlay, in-browser recording, and multi-protocol support (FPV USB receiver, MJPEG, HLS, Direct MP4).
-- **Object Finder** — two search modes: **Facial Attributes** (filter by gender, age, hair color, glasses, skin tone, clothing) and **Visual Match** (CLIP-based target photo similarity). Scans uploaded video or live stream and returns every appearance with timestamp, confidence, and thumbnail.
+- **Object Finder** — upload a target photo and AI (CLIP-based) scans uploaded video or a live stream to find every appearance with timestamp, confidence, and cropped thumbnail.
 
 ---
 
 ## AI Models
 
-SkyRecon uses 7 specialized fine-tuned models alongside base YOLOv8:
+SkyRecon uses 5 specialized fine-tuned models alongside base YOLOv8:
 
 | Model File | Trained On | Best For |
 |---|---|---|
@@ -62,8 +62,6 @@ SkyRecon uses 7 specialized fine-tuned models alongside base YOLOv8:
 | `skyrecon_fire_smoke.pt` | Fire/Smoke dataset | Fire detection, smoke plumes |
 | `skyrecon_flood.pt` | Flood imagery | Flood water, inundated areas |
 | `skyrecon_trees_plants.pt` | Aerial vegetation | Trees & plants |
-| `skyrecon_buildings.pt` | `keremberke/yolov8s-building-segmentation` (HF Hub) | Buildings & houses segmentation |
-| `skyrecon_solar_panels.pt` | `finloop/yolov8s-seg-solar-panels` (HF Hub) | Solar panel detection |
 | `yolov8s.pt` | COCO (general) | Recommended fallback |
 | `yolov8n.pt` | COCO (general) | Fast fallback (free-tier servers) |
 | `yolov8x.pt` | COCO (general) | High accuracy (requires GPU) |
@@ -151,8 +149,6 @@ SkyRecon/
 │   ├── hooks/
 │   │   ├── useWeather.js             # Open-Meteo weather + drone safety check
 │   │   └── useRecordingsStore.js     # localStorage recordings store + cross-tab sync
-│   ├── lib/
-│   │   └── api.js                    # fetchJson utility (API base URL + error handling)
 │   ├── components/
 │   │   ├── Sidebar.jsx               # Navigation sidebar
 │   │   └── ui/                       # Reusable UI components
@@ -175,7 +171,7 @@ SkyRecon/
 │       ├── AdminPage.jsx             # Category & system management
 │       ├── LiveFeedPage.jsx          # Real-time drone stream + telemetry + recording
 │       ├── RecordingsPage.jsx        # Playback, download & manage saved recordings
-│       └── FindPage.jsx              # AI object finder (Facial Attributes + CLIP visual match)
+│       └── FindPage.jsx              # AI object finder (CLIP) in video or live stream
 │
 ├── public/
 │   └── skyrecon-favicon.svg          # App favicon
@@ -185,8 +181,6 @@ SkyRecon/
     ├── Procfile                      # Render.com process definition
     ├── requirements.txt              # Python dependencies
     ├── download_models.py            # Downloads .pt weights from GitHub Releases at build time
-    ├── download_hf_models.py         # Downloads buildings + solar panels models from HuggingFace Hub
-    ├── optimize_models.py            # Strips optimizer state + EMA promotion + FP16 conversion
     ├── .env.example                  # Environment variable template
     │
     ├── app/
@@ -197,7 +191,6 @@ SkyRecon/
     │   │   ├── video_processor.py    # Full mapping pipeline (YOLO + ByteTrack + SegFormer)
     │   │   ├── disaster_engine.py    # Disaster classification + severity scoring
     │   │   ├── area_calculator.py    # Bounding box → real-world m²
-    │   │   ├── face_finder.py        # Facial attribute search (YOLO person + CLIP matching)
     │   │   └── report_generator.py   # PDF + DOCX with screenshots
     │   ├── api/v1/
     │   │   ├── analysis.py           # Upload, status, results, reports, object finder
@@ -235,8 +228,6 @@ SkyRecon/
     ├── skyrecon_fire_smoke.pt        # Fine-tuned: fire & smoke (545 MB)
     ├── skyrecon_flood.pt             # Fine-tuned: flood water (136 MB)
     ├── skyrecon_trees_plants.pt      # Fine-tuned: trees & plants (89 MB)
-    ├── skyrecon_buildings.pt         # HuggingFace Hub: keremberke/yolov8s-building-segmentation
-    ├── skyrecon_solar_panels.pt      # HuggingFace Hub: finloop/yolov8s-seg-solar-panels
     ├── yolov8s.pt                    # General COCO model (recommended)
     ├── yolov8n.pt                    # Fast COCO model (free-tier safe)
     └── yolov8x.pt                    # High-accuracy COCO model (GPU only)
@@ -313,7 +304,7 @@ GitHub Repo (ShibamKhadanga/SkyRecon)
 | `yolov8n.pt` | 37.3 — minimal | ✅ Runs |
 | `yolov8s.pt` | 44.9 — good | ✅ Runs |
 | `yolov8x.pt` | 53.9 — full | ✅ Runs (no GPU, slower) |
-| Custom `.pt` models | Custom trained | ✅ All 7 run |
+| Custom `.pt` models | Custom trained | ✅ All 5 run |
 
 > **This deployment uses HuggingFace Spaces CPU Basic (2 vCPU · 16 GB RAM)** — all 5 custom fine-tuned models run without OOM. Upgrade to **T4 small GPU** ($0.40/hr) for real-time speed.
 
@@ -439,20 +430,11 @@ Features:
 
 ## Object Finder
 
-Access at `/find`. Two search modes for finding people or objects in drone footage.
+Access at `/find`. Upload a target photo (person, vehicle, any object) and AI scans drone footage to find every appearance.
 
-### Facial Attributes Mode
-- Filter by: gender, age group, hair color, facial hair, glasses, skin tone, clothing color
-- Optionally upload a reference face photo to improve accuracy
-- Backend: YOLO person detection → face crop → CLIP attribute matching
-
-### Visual Match Mode
-- Upload a target photo (person, vehicle, any object)
-- Backend: CLIP feature embedding → frame-by-frame cosine similarity
-
-**Common features:**
+- Target source: any image file
 - Video source: uploaded file **or** live stream (MJPEG / HLS / FPV USB)
-- Backend: `POST /api/v1/analysis/find-object`
+- Backend: `POST /api/v1/analysis/find-object` — CLIP-based feature matching
 - Output: timestamp, confidence score, cropped thumbnail per match, exportable results
 
 ---
@@ -481,12 +463,12 @@ Access at `/recordings`. All recordings captured from the Live Feed page are sto
 | Trees | `skyrecon_trees_plants.pt` | SegFormer-B2 + ExG index |
 | Plants | `skyrecon_trees_plants.pt` | SegFormer-B2 + HSV green |
 | Water Bodies | `yolov8s.pt` | SegFormer-B2 + HSV blue |
-| Buildings | `skyrecon_buildings.pt` | YOLOv8 segmentation + solidity |
-| Houses | `skyrecon_buildings.pt` | YOLOv8 segmentation + solidity |
+| Buildings | `yolov8s.pt` | SegFormer-B2 + solidity |
+| Houses | `yolov8s.pt` | SegFormer-B2 + solidity |
 | Roads | `yolov8s.pt` | HSV asphalt + elongation |
 | Electric Poles | `yolov8s.pt` | Vertical edge detection |
 | Street Lights | `yolov8s.pt` | Vertical edge detection |
-| Solar Panels | `skyrecon_solar_panels.pt` | YOLOv8 segmentation + HSV mask |
+| Solar Panels | `yolov8s.pt` | HSV dark-blue mask |
 | Agricultural Land | `yolov8s.pt` | HSV green + brown |
 | Construction Zones | `yolov8s.pt` | HSV earth + yellow |
 | Parking Areas | `yolov8s.pt` | HSV asphalt + area |

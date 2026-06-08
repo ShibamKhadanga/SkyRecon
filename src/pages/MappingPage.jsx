@@ -420,7 +420,8 @@ export default function MappingPage() {
     const saved = localStorage.getItem('skyrecon_mapping_job')
     if (!saved) return
     const { id, startTime } = JSON.parse(saved)
-    fetchJson(`/api/v1/analysis/${id}/status`)
+    fetch(`/api/v1/analysis/${id}/status`)
+      .then(r => r.json())
       .then(data => {
         if (data.status === 'processing') {
           setAnalysisId(id)
@@ -432,7 +433,8 @@ export default function MappingPage() {
         } else if (data.status === 'completed') {
           setAnalysisId(id)
           setAnalysisProgress(100)
-          fetchJson(`/api/v1/analysis/${id}/summary`)
+          fetch(`/api/v1/analysis/${id}/summary`)
+            .then(r => r.json())
             .then(summary => {
               setRealResults(summary)
               setShowReport(true)
@@ -473,9 +475,16 @@ export default function MappingPage() {
         }
         if (data.status === 'processing') {
           setTerminalLogs(prev => {
-            const last = prev[prev.length - 1] || ''
-            if (last.includes('detected so far')) prev = prev.slice(0, -1)
-            return [...prev, `[AI] ${data.total_objects} objects detected so far... (${data.progress ?? '?'}%)`]
+            const next = [...prev]
+            const liveMsg = data.live_msg
+              ? `[AI] ${data.live_msg}`
+              : `[AI] Processing... ${data.progress ?? '?'}% — ${data.total_objects ?? 0} objects found`
+            if (next.length > 0 && next[next.length - 1].startsWith('[AI]')) {
+              next[next.length - 1] = liveMsg
+            } else {
+              next.push(liveMsg)
+            }
+            return next
           })
         } else if (data.status === 'completed') {
           clearInterval(pollRef.current)
@@ -514,7 +523,7 @@ export default function MappingPage() {
     setShowReport(false)
     setRealResults(null)
     setApiError(null)
-    setAnalysisProgress(5)
+    setAnalysisProgress(0)
     setEtaSeconds(null)
     setAnalysisStartTime(startTime)
     setTerminalLogs([
@@ -534,16 +543,15 @@ export default function MappingPage() {
       formData.append('characteristics', JSON.stringify(characteristics))
       formData.append('custom_query', customPrompt)
 
-      const data = await fetchJson('/api/v1/analysis/upload', { method: 'POST', body: formData })
+      const res = await fetch('/api/v1/analysis/upload', { method: 'POST', body: formData })
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
+      const data = await res.json()
       setAnalysisId(data.id)
-      setAnalysisProgress(15)
-      // Persist job to localStorage so navigating away doesn't lose it
+      setAnalysisProgress(2)
       localStorage.setItem('skyrecon_mapping_job', JSON.stringify({ id: data.id, startTime }))
       setTerminalLogs(prev => [
         ...prev,
-        `[SYSTEM] Job created (ID: ${data.id}). YOLOv8 pipeline starting...`,
-        '[YOLOv8] Loading model weights, fusing Conv+BN layers...',
-        '[AI] Extracting frames at 2fps for inference...',
+        `[SYSTEM] Job created (ID: ${data.id}). Loading model weights...`,
       ])
       startPolling(data.id, startTime)
     } catch (e) {
@@ -582,9 +590,7 @@ export default function MappingPage() {
             clearInterval(poll)
             window.open(`/api/v1/analysis/report/${rid}/download`, '_blank')
           }
-        } catch (_) {
-          // keep polling until ready or timeout
-        }
+        } catch (_) {}
       }, 2000)
     } catch (e) {
       alert(`Report generation failed: ${e.message}`)
