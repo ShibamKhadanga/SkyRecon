@@ -53,7 +53,7 @@ Four core modules:
 
 ## AI Models
 
-SkyRecon uses 5 specialized fine-tuned models alongside base YOLOv8:
+SkyRecon uses 7 specialized fine-tuned models alongside base YOLOv8:
 
 | Model File | Trained On | Best For |
 |---|---|---|
@@ -62,6 +62,8 @@ SkyRecon uses 5 specialized fine-tuned models alongside base YOLOv8:
 | `skyrecon_fire_smoke.pt` | Fire/Smoke dataset | Fire detection, smoke plumes |
 | `skyrecon_flood.pt` | Flood imagery | Flood water, inundated areas |
 | `skyrecon_trees_plants.pt` | Aerial vegetation | Trees & plants |
+| `skyrecon_buildings.pt` | `keremberke/yolov8s-building-segmentation` (HF Hub) | Buildings & houses segmentation |
+| `skyrecon_solar_panels.pt` | `finloop/yolov8s-seg-solar-panels` (HF Hub) | Solar panel detection |
 | `yolov8s.pt` | COCO (general) | Recommended fallback |
 | `yolov8n.pt` | COCO (general) | Fast fallback (free-tier servers) |
 | `yolov8x.pt` | COCO (general) | High accuracy (requires GPU) |
@@ -183,6 +185,8 @@ SkyRecon/
     ├── Procfile                      # Render.com process definition
     ├── requirements.txt              # Python dependencies
     ├── download_models.py            # Downloads .pt weights from GitHub Releases at build time
+    ├── download_hf_models.py         # Downloads buildings + solar panels models from HuggingFace Hub
+    ├── optimize_models.py            # Strips optimizer state + EMA promotion + FP16 conversion
     ├── .env.example                  # Environment variable template
     │
     ├── app/
@@ -231,6 +235,8 @@ SkyRecon/
     ├── skyrecon_fire_smoke.pt        # Fine-tuned: fire & smoke (545 MB)
     ├── skyrecon_flood.pt             # Fine-tuned: flood water (136 MB)
     ├── skyrecon_trees_plants.pt      # Fine-tuned: trees & plants (89 MB)
+    ├── skyrecon_buildings.pt         # HuggingFace Hub: keremberke/yolov8s-building-segmentation
+    ├── skyrecon_solar_panels.pt      # HuggingFace Hub: finloop/yolov8s-seg-solar-panels
     ├── yolov8s.pt                    # General COCO model (recommended)
     ├── yolov8n.pt                    # Fast COCO model (free-tier safe)
     └── yolov8x.pt                    # High-accuracy COCO model (GPU only)
