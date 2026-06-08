@@ -456,7 +456,7 @@ export default function FindPage() {
   const [videoFile, setVideoFile]     = useState(null)
   const [videoPreview, setVideoPreview] = useState(null)
   const [videoMode, setVideoMode]     = useState('upload') // 'upload' | 'live' | 'usb'
-  const [searchMode, setSearchMode]   = useState('facial') // 'visual' | 'facial'
+  const [searchMode, setSearchMode]   = useState('visual') // 'visual' | 'facial'
   const [facialAttrs, setFacialAttrs] = useState({
     gender: '', age_group: '', hair_color: '', facial_hair: '',
     glasses: '', skin_tone: '', clothing_color: '',
