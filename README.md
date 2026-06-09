@@ -74,10 +74,13 @@ The pipeline automatically selects the best model per category. On deployment, a
 
 ## Detection Pipeline
 
+> **75% Confidence Gate**: All pipelines apply a post-inference confidence filter (`MIN_DISPLAY_CONFIDENCE = 0.75`). The models run at low thresholds to maximize recall, but only detections with ≥75% confidence are recorded and displayed. This is configurable via `.env`.
+
 **YOLO-detectable categories** (People, Vehicles, Animals...):
 ```
 Frame → CLAHE Enhancement → Resize 640px → YOLOv8 + ByteTrack
      → Aerial misclassification fix (kite→person etc.)
+     → ★ 75% confidence gate (discard low-confidence detections)
      → Characteristics filter (2-Wheeler, color, etc.)
      → Unique object tracking (one count per track ID)
      → Cropped screenshot per new unique object
@@ -89,6 +92,7 @@ Frame → SegFormer-B2 segmentation + OpenCV heuristics
      → ExG vegetation index (trees/plants)
      → HSV color analysis (fire, water, solar panels)
      → Edge detection (poles, bridges, pipelines)
+     → ★ 75% confidence gate
      → Grid-based deduplication
 ```
 
@@ -348,7 +352,8 @@ SkyRecon is **PWA-ready** (Progressive Web App). Users on Android and iOS can in
 | `DB_USER` | `postgres` | Database user |
 | `DB_PASSWORD` | `postgres` | Database password |
 | `YOLO_MODEL` | `yolov8s.pt` | Base fallback model (`yolov8n.pt` on free tier) |
-| `CONFIDENCE_THRESHOLD` | `0.35` | Detection confidence threshold |
+| `CONFIDENCE_THRESHOLD` | `0.35` | YOLO inference confidence threshold |
+| `MIN_DISPLAY_CONFIDENCE` | `0.75` | Post-inference gate — only display/record detections ≥ this |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated CORS origins |
 | `UPLOAD_DIR` | `uploads` | Directory for uploaded files |
 | `SCREENSHOT_DIR` | `screenshots` | Directory for per-object screenshots |
@@ -445,15 +450,28 @@ Access at `/find`. Two search modes for finding people or objects in drone foota
 - Filter by: gender, age group, hair color, facial hair, glasses, skin tone, clothing color
 - Optionally upload a reference face photo to improve accuracy
 - Backend: YOLO person detection → face crop → CLIP attribute matching
+- Similarity threshold: 75% (matches the global confidence gate)
 
-### Visual Match Mode
+### Visual Match Mode (Detect-then-Match Pipeline)
 - Upload a target photo (person, vehicle, any object)
-- Backend: CLIP feature embedding → frame-by-frame cosine similarity
+- Backend uses a **detect-then-match** pipeline for high accuracy:
+```
+Target Photo → CLIP encode
+For each frame (every 10th frame ≈ 3 FPS):
+  YOLO detects all persons → bounding boxes
+  For each person:
+    Tight crop + 1.5× context crop → CLIP encode both
+    Cosine similarity vs target → take max
+    ★ 75% confidence gate
+    Spatial dedup on 60px grid (avoid duplicate reports)
+```
+- This is dramatically better than whole-frame comparison because CLIP compares **person-to-person** instead of person-to-random-aerial-landscape
 
 **Common features:**
 - Video source: uploaded file **or** live stream (MJPEG / HLS / FPV USB)
 - Backend: `POST /api/v1/analysis/find-object`
 - Output: timestamp, confidence score, cropped thumbnail per match, exportable results
+- All matches ≥ 75% confidence only
 
 ---
 
