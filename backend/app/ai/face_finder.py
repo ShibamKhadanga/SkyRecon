@@ -61,7 +61,7 @@ def scan_video_facial_attributes(
             text_feats = text_feats / text_feats.norm(dim=-1, keepdim=True)
 
     FRAME_INTERVAL = 15
-    SIMILARITY_THRESHOLD = 0.22
+    SIMILARITY_THRESHOLD = 0.75  # 75% confidence gate
     matches = []
 
     cap = cv2.VideoCapture(video_path)

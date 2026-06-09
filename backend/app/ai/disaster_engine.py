@@ -17,6 +17,9 @@ from sqlalchemy import text
 from ..core.config import settings
 from .video_processor import _save_screenshot, FRAMES_PER_SECOND, _write_progress, _get_model, _get_model_for_category
 
+# 75% confidence gate — only report high-confidence disaster detections
+MIN_CONF = settings.MIN_DISPLAY_CONFIDENCE
+
 logger = logging.getLogger(__name__)
 
 DISASTER_TRIGGERS: dict[str, list[str]] = {
@@ -142,6 +145,10 @@ def _classify_frame_disaster(frame: np.ndarray, boxes, names: dict) -> list[dict
         cls_name = names[cls_id].lower()
         confidence = float(box.conf[0])
 
+        # 75% confidence gate
+        if confidence < MIN_CONF:
+            continue
+
         matched_type = None
         for dtype, triggers in DISASTER_TRIGGERS.items():
             if cls_name in triggers:
@@ -238,36 +245,44 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
                 fire_ratio, smoke_ratio = _detect_fire_smoke(frame)
                 # Raised thresholds for image mode — no temporal averaging available
                 if fire_ratio > 0.025 or smoke_ratio > 0.05:
-                    event_accumulator.setdefault("fire", []).append({
-                        "type": "fire",
-                        "confidence": min(0.95, 0.35 + max(fire_ratio, smoke_ratio) * 2.5),
-                        "area_ratio": max(fire_ratio, smoke_ratio),
-                        "count": 1,
-                        "frame_idx": frame_idx,
-                        "timestamp": timestamp_sec,
-                    })
+                    _fire_conf = min(0.95, 0.35 + max(fire_ratio, smoke_ratio) * 2.5)
+                    if _fire_conf >= MIN_CONF:
+                        event_accumulator.setdefault("fire", []).append({
+                            "type": "fire",
+                            "confidence": _fire_conf,
+                            "area_ratio": max(fire_ratio, smoke_ratio),
+                            "count": 1,
+                            "frame_idx": frame_idx,
+                            "timestamp": timestamp_sec,
+                        })
 
                 water_ratio = _detect_flood_water(frame)
                 # Raised threshold for image mode
                 if water_ratio > 0.08:
-                    event_accumulator.setdefault("flood", []).append({
-                        "type": "flood",
-                        "confidence": min(0.92, 0.30 + water_ratio * 2.0),
-                        "area_ratio": water_ratio,
-                        "count": 1,
-                        "frame_idx": frame_idx,
-                        "timestamp": timestamp_sec,
-                    })
+                    _flood_conf = min(0.92, 0.30 + water_ratio * 2.0)
+                    if _flood_conf >= MIN_CONF:
+                        event_accumulator.setdefault("flood", []).append({
+                            "type": "flood",
+                            "confidence": _flood_conf,
+                            "area_ratio": water_ratio,
+                            "count": 1,
+                            "frame_idx": frame_idx,
+                            "timestamp": timestamp_sec,
+                        })
 
                 if _detect_structural_damage(frame):
-                    event_accumulator.setdefault("structural", []).append({
-                        "type": "structural",
-                        "confidence": 0.54,
-                        "area_ratio": 0.12,
-                        "count": 1,
-                        "frame_idx": frame_idx,
-                        "timestamp": timestamp_sec,
-                    })
+                    # Structural heuristic confidence is 0.54 — below 75% gate,
+                    # so only record if threshold is lowered or evidence is strong
+                    _struct_conf = 0.54
+                    if _struct_conf >= MIN_CONF:
+                        event_accumulator.setdefault("structural", []).append({
+                            "type": "structural",
+                            "confidence": _struct_conf,
+                            "area_ratio": 0.12,
+                            "count": 1,
+                            "frame_idx": frame_idx,
+                            "timestamp": timestamp_sec,
+                        })
             _write_progress(db, analysis_id, 90, 0)
         else:
             for frame_idx in range(0, total_frames, frame_interval):
@@ -317,35 +332,41 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
                 fire_ratio, smoke_ratio = _detect_fire_smoke(frame_small)
                 # Video mode: lower threshold ok since MIN_OCCURRENCES filters noise
                 if fire_ratio > 0.015 or smoke_ratio > 0.04:
-                    event_accumulator.setdefault("fire", []).append({
-                        "type": "fire",
-                        "confidence": min(0.95, 0.35 + max(fire_ratio, smoke_ratio) * 2.5),
-                        "area_ratio": max(fire_ratio, smoke_ratio),
-                        "count": 1,
-                        "frame_idx": frame_idx,
-                        "timestamp": timestamp_sec,
-                    })
+                    _fire_conf = min(0.95, 0.35 + max(fire_ratio, smoke_ratio) * 2.5)
+                    if _fire_conf >= MIN_CONF:
+                        event_accumulator.setdefault("fire", []).append({
+                            "type": "fire",
+                            "confidence": _fire_conf,
+                            "area_ratio": max(fire_ratio, smoke_ratio),
+                            "count": 1,
+                            "frame_idx": frame_idx,
+                            "timestamp": timestamp_sec,
+                        })
 
                 water_ratio = _detect_flood_water(frame_small)
                 if water_ratio > 0.06:
-                    event_accumulator.setdefault("flood", []).append({
-                        "type": "flood",
-                        "confidence": min(0.92, 0.30 + water_ratio * 2.0),
-                        "area_ratio": water_ratio,
-                        "count": 1,
-                        "frame_idx": frame_idx,
-                        "timestamp": timestamp_sec,
-                    })
+                    _flood_conf = min(0.92, 0.30 + water_ratio * 2.0)
+                    if _flood_conf >= MIN_CONF:
+                        event_accumulator.setdefault("flood", []).append({
+                            "type": "flood",
+                            "confidence": _flood_conf,
+                            "area_ratio": water_ratio,
+                            "count": 1,
+                            "frame_idx": frame_idx,
+                            "timestamp": timestamp_sec,
+                        })
 
                 if _detect_structural_damage(frame_small):
-                    event_accumulator.setdefault("structural", []).append({
-                        "type": "structural",
-                        "confidence": 0.54,
-                        "area_ratio": 0.12,
-                        "count": 1,
-                        "frame_idx": frame_idx,
-                        "timestamp": timestamp_sec,
-                    })
+                    _struct_conf = 0.54
+                    if _struct_conf >= MIN_CONF:
+                        event_accumulator.setdefault("structural", []).append({
+                            "type": "structural",
+                            "confidence": _struct_conf,
+                            "area_ratio": 0.12,
+                            "count": 1,
+                            "frame_idx": frame_idx,
+                            "timestamp": timestamp_sec,
+                        })
 
                 if total_frames > 0:
                     pct = min(90, int((frame_idx / total_frames) * 100))
@@ -367,6 +388,9 @@ def run_disaster_analysis(analysis_id: int, video_path: str, db: Session) -> dic
                 continue
 
             avg_confidence = sum(o["confidence"] for o in occurrences) / len(occurrences)
+            # 75% confidence gate at event persistence level
+            if avg_confidence < MIN_CONF:
+                continue
             avg_area = sum(o["area_ratio"] for o in occurrences) / len(occurrences)
             total_count = sum(o["count"] for o in occurrences)
             best_timestamp = occurrences[0]["timestamp"]

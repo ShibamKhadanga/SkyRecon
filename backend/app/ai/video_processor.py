@@ -126,6 +126,26 @@ def _run_segformer(
         logger.debug(f"[AI] SegFormer inference failed: {e}")
         return None
 
+# ── PyTorch thread configuration — must run BEFORE any model is loaded ─────────
+# torch.set_num_interop_threads() cannot be called after parallel work starts,
+# so we configure it once at module-import time.
+try:
+    import torch as _torch
+    _cpu_count = os.cpu_count() or 4
+    _intra = max(1, _cpu_count // 2)
+    _inter = max(1, _cpu_count - _intra)
+    try:
+        _torch.set_num_threads(_intra)
+    except RuntimeError:
+        pass  # already set
+    try:
+        _torch.set_num_interop_threads(_inter)
+    except RuntimeError:
+        pass  # already set or parallel work already started
+    logger.info(f"[AI] PyTorch threads configured: intra={_intra}, inter={_inter}")
+except ImportError:
+    pass  # torch not installed yet
+
 # ── Model cache — load once per process, reuse across all analyses ────────────
 _model_cache: dict[str, YOLO] = {}
 
@@ -148,15 +168,9 @@ SPECIALIST_MODELS: dict[str, str] = {
 }
 
 def _get_model(model_path: str) -> YOLO:
-    """Load and cache YOLO model. Auto-detects optimal thread count."""
+    """Load and cache YOLO model."""
     if model_path not in _model_cache:
-        import torch
-        cpu_count = os.cpu_count() or 4
-        intra = max(1, cpu_count // 2)
-        inter = max(1, cpu_count - intra)
-        torch.set_num_threads(intra)
-        torch.set_num_interop_threads(inter)
-        logger.info(f"[AI] Loading model: {model_path} | threads={intra}+{inter}")
+        logger.info(f"[AI] Loading model: {model_path}")
         m = YOLO(model_path)
         m.fuse()
         _model_cache[model_path] = m
@@ -685,6 +699,9 @@ def _detect_heuristic(
 
     # ── Now process all heuristic detections into batch ───────────────────────
     for (x1, y1, x2, y2, label, conf) in detections:
+        # 75% confidence gate — only record high-confidence detections
+        if conf < settings.MIN_DISPLAY_CONFIDENCE:
+            continue
         # Centre-point spatial key on 25px grid
         spatial_key = (
             round((x1 + x2) / 2 / 25),
@@ -1027,6 +1044,10 @@ def run_mapping_analysis(
                     cls_name   = model.names[cls_id]
                     confidence = float(box.conf[0])
                     track_id   = int(box.id[0]) if box.id is not None else None
+
+                    # 75% confidence gate — only record high-confidence detections
+                    if confidence < settings.MIN_DISPLAY_CONFIDENCE:
+                        continue
 
                     # Scale bbox to original resolution
                     x1, y1, x2, y2 = box.xyxy[0].tolist()

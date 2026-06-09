@@ -130,30 +130,37 @@ async def find_object(
     facial_attributes: str = Form("{}"),
 ):
     """
-    Given a target image and a video (uploaded or live URL),
-    finds all frames where the target object/person appears.
-    Uses CLIP for feature similarity matching.
+    Detect-then-match pipeline for finding a person in drone footage.
+
+    1. YOLO detects all persons in each sampled frame
+    2. Each person crop is encoded with CLIP
+    3. Similarity is computed against the target image embedding
+    4. Only matches ≥ 75% confidence are returned
+    5. Spatial dedup prevents reporting the same person multiple times
     """
     import cv2, numpy as np, tempfile, base64
     from PIL import Image as PILImage
     import io
 
-    # ── Load CLIP ──
+    from ..core.config import settings
+
+    # ── Load CLIP + YOLO ──
     try:
         import torch
         from transformers import CLIPProcessor, CLIPModel
+        from ultralytics import YOLO
         device = "cuda" if torch.cuda.is_available() else "cpu"
         clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
         clip_proc  = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        yolo = YOLO("yolov8s.pt")
     except Exception as e:
-        raise HTTPException(500, f"Failed to load CLIP model: {e}")
+        raise HTTPException(500, f"Failed to load models: {e}")
 
     # ── Encode target image ──
     target_bytes = await target_image.read()
     target_pil   = PILImage.open(io.BytesIO(target_bytes)).convert("RGB")
     with torch.no_grad():
         t_inputs = clip_proc(images=target_pil, return_tensors="pt")
-        # Pass only pixel_values to get_image_features to avoid unexpected key errors
         target_feat = clip_model.get_image_features(pixel_values=t_inputs["pixel_values"].to(device))
         target_feat = target_feat / target_feat.norm(dim=-1, keepdim=True)
 
@@ -170,10 +177,13 @@ async def find_object(
     else:
         raise HTTPException(400, "Provide either a video file or live_url")
 
-    # ── Scan frames ──
-    SIMILARITY_THRESHOLD = 0.72
-    FRAME_INTERVAL = 30   # check every 30 frames (~1s at 30fps)
+    # ── Scan frames with detect-then-match ──
+    SIMILARITY_THRESHOLD = settings.MIN_DISPLAY_CONFIDENCE  # 0.75
+    FRAME_INTERVAL = 10   # check every 10 frames (~3 FPS at 30fps)
+    PERSON_CONF = 0.25    # YOLO person detection threshold (low to maximize recall)
+    CONTEXT_PAD = 1.5     # padding multiplier for context crop
     matches = []
+    seen_positions = {}   # spatial dedup: grid_key -> best_score
 
     try:
         cap = cv2.VideoCapture(video_path)
@@ -190,29 +200,73 @@ async def find_object(
 
             if frame_idx % FRAME_INTERVAL == 0:
                 timestamp = frame_idx / fps
+                h, w = frame.shape[:2]
 
-                # Convert frame to PIL
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_pil = PILImage.fromarray(frame_rgb)
+                # Step 1: YOLO person detection
+                results = yolo(frame, verbose=False, conf=PERSON_CONF, classes=[0])
 
-                # CLIP similarity
-                with torch.no_grad():
-                    f_inputs = clip_proc(images=frame_pil, return_tensors="pt")
-                    frame_feat = clip_model.get_image_features(pixel_values=f_inputs["pixel_values"].to(device))
-                    frame_feat = frame_feat / frame_feat.norm(dim=-1, keepdim=True)
-                    similarity = float((target_feat @ frame_feat.T).squeeze())
+                for result in results:
+                    if result.boxes is None:
+                        continue
+                    for box in result.boxes:
+                        x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
+                        bw, bh = x2 - x1, y2 - y1
+                        if bw < 5 or bh < 5:
+                            continue
 
-                if similarity >= SIMILARITY_THRESHOLD:
-                    # Capture thumbnail as base64 JPEG
-                    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                    thumb_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode()
+                        # Step 2: Create tight crop + padded context crop
+                        tight_crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+                        if tight_crop.size == 0:
+                            continue
 
-                    matches.append({
-                        "timestamp":   round(timestamp, 2),
-                        "confidence":  round(similarity, 3),
-                        "description": f"Match at {int(timestamp//60):02d}:{int(timestamp%60):02d} — similarity {similarity:.0%}",
-                        "thumbnail":   thumb_b64,
-                    })
+                        # Context crop: 1.5× padding around person bbox
+                        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                        ctx_w = int(bw * CONTEXT_PAD / 2)
+                        ctx_h = int(bh * CONTEXT_PAD / 2)
+                        ctx_x1 = max(0, cx - ctx_w)
+                        ctx_y1 = max(0, cy - ctx_h)
+                        ctx_x2 = min(w, cx + ctx_w)
+                        ctx_y2 = min(h, cy + ctx_h)
+                        context_crop = frame[ctx_y1:ctx_y2, ctx_x1:ctx_x2]
+
+                        # Step 3: Encode crops with CLIP
+                        best_sim = 0.0
+                        for crop in [tight_crop, context_crop]:
+                            if crop.size == 0:
+                                continue
+                            crop_pil = PILImage.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+                            with torch.no_grad():
+                                c_in = clip_proc(images=crop_pil, return_tensors="pt")
+                                crop_feat = clip_model.get_image_features(
+                                    pixel_values=c_in["pixel_values"].to(device)
+                                )
+                                crop_feat = crop_feat / crop_feat.norm(dim=-1, keepdim=True)
+                                sim = float((target_feat @ crop_feat.T).squeeze())
+                                best_sim = max(best_sim, sim)
+
+                        # Step 4: Apply 75% confidence gate
+                        if best_sim < SIMILARITY_THRESHOLD:
+                            continue
+
+                        # Step 5: Spatial dedup on 60px grid
+                        grid_key = (round((x1 + x2) / 2 / 60), round((y1 + y2) / 2 / 60))
+                        if grid_key in seen_positions and seen_positions[grid_key] >= best_sim:
+                            continue
+                        seen_positions[grid_key] = best_sim
+
+                        # Capture thumbnail
+                        _, buf = cv2.imencode(".jpg", tight_crop, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                        thumb_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode()
+
+                        matches.append({
+                            "timestamp":   round(timestamp, 2),
+                            "confidence":  round(best_sim, 3),
+                            "description": (
+                                f"Person match at {int(timestamp//60):02d}:{int(timestamp%60):02d} "
+                                f"— similarity {best_sim:.0%}"
+                            ),
+                            "thumbnail":   thumb_b64,
+                        })
 
             frame_idx += 1
 
