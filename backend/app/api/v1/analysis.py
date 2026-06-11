@@ -121,6 +121,58 @@ def is_cancelled(analysis_id: int) -> bool:
 
 # ── Find Object endpoint ──────────────────────────────────────────────────────
 
+# CLIP model cache — load once per process
+_clip_cache: dict = {}
+
+def _get_clip_model():
+    """
+    Load CLIP model and processor, cached after first load.
+    Tries clip-vit-base-patch32 first (faster, known to work), then
+    upgrades to clip-vit-large-patch14 if available.
+    """
+    if "model" in _clip_cache:
+        return _clip_cache["model"], _clip_cache["proc"], _clip_cache["device"]
+    import torch
+    from transformers import CLIPProcessor, CLIPModel
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Try base model first (smaller, known working on this system)
+    for model_name in [
+        "openai/clip-vit-base-patch32",
+        "openai/clip-vit-large-patch14",
+    ]:
+        try:
+            model = CLIPModel.from_pretrained(model_name).to(device)
+            proc = CLIPProcessor.from_pretrained(model_name)
+            model.eval()
+            _clip_cache["model"] = model
+            _clip_cache["proc"] = proc
+            _clip_cache["device"] = device
+            logger.info(f"[FindObject] Loaded CLIP model: {model_name} on {device}")
+            return model, proc, device
+        except Exception as e:
+            logger.warning(f"[FindObject] Failed to load {model_name}: {e}")
+            continue
+    raise RuntimeError("Could not load any CLIP model")
+
+
+def _to_tensor(feat):
+    """Extract a plain tensor from CLIP output (handles structured outputs)."""
+    import torch
+    if isinstance(feat, torch.Tensor):
+        return feat
+    # Some transformers versions return BaseModelOutputWithPooling
+    if hasattr(feat, 'pooler_output'):
+        return feat.pooler_output
+    if hasattr(feat, 'last_hidden_state'):
+        return feat.last_hidden_state[:, 0]
+    # Fallback: try indexing
+    try:
+        return feat[0]
+    except Exception:
+        return feat
+
+
 @router.post("/find-object")
 async def find_object(
     target_image: Optional[UploadFile] = File(None),
@@ -130,32 +182,148 @@ async def find_object(
     facial_attributes: str = Form("{}"),
 ):
     """
-    Given a target image and a video (uploaded or live URL),
-    finds all frames where the target object/person appears.
-    Uses CLIP for feature similarity matching.
+    Finds a target person/object in drone video footage.
+
+    Pipeline:
+    1. YOLO detects all people in each sampled frame
+    2. CLIP encodes each person crop
+    3. Cosine similarity is computed between target image and each crop
+    4. Matches above threshold are returned with timestamps and thumbnails
+
+    This replaces the old approach that compared against full frames (which
+    never worked because CLIP similarity between a face crop and a full
+    aerial scene with buildings/trees/sky is extremely low).
     """
-    import cv2, numpy as np, tempfile, base64
+    import traceback as _tb
+    try:
+        return await _find_object_impl(
+            target_image=target_image, video=video, live_url=live_url,
+            search_mode=search_mode, facial_attributes=facial_attributes,
+        )
+    except HTTPException:
+        raise  # let FastAPI handle these normally
+    except Exception as e:
+        raise HTTPException(500, detail=f"{type(e).__name__}: {e}\n{_tb.format_exc()}")
+
+
+async def _find_object_impl(
+    target_image, video, live_url, search_mode, facial_attributes
+):
+    import cv2, numpy as np, tempfile, base64, json
     from PIL import Image as PILImage
     import io
 
-    # ── Load CLIP ──
+    # ── Load models ──
     try:
         import torch
-        from transformers import CLIPProcessor, CLIPModel
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-        clip_proc  = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        clip_model, clip_proc, device = _get_clip_model()
     except Exception as e:
         raise HTTPException(500, f"Failed to load CLIP model: {e}")
 
-    # ── Encode target image ──
-    target_bytes = await target_image.read()
-    target_pil   = PILImage.open(io.BytesIO(target_bytes)).convert("RGB")
-    with torch.no_grad():
-        t_inputs = clip_proc(images=target_pil, return_tensors="pt")
-        # Pass only pixel_values to get_image_features to avoid unexpected key errors
-        target_feat = clip_model.get_image_features(pixel_values=t_inputs["pixel_values"].to(device))
-        target_feat = target_feat / target_feat.norm(dim=-1, keepdim=True)
+    try:
+        from ultralytics import YOLO
+        yolo = YOLO("yolov8s.pt")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to load YOLO model: {e}")
+
+    # ── Face detection helper using OpenCV Haar cascade ──
+    _face_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+
+    def _detect_face_crop(img_bgr):
+        """Detect the largest face in a BGR image and return the face crop (BGR).
+        Returns None if no face found."""
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        faces = _face_cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=4, minSize=(20, 20)
+        )
+        if len(faces) == 0:
+            return None
+        # Pick the largest face
+        areas = [w * h for (x, y, w, h) in faces]
+        idx = np.argmax(areas)
+        fx, fy, fw, fh = faces[idx]
+        # Add 20% padding around face for hair/chin context
+        pad = int(0.2 * max(fw, fh))
+        ih, iw = img_bgr.shape[:2]
+        fx1 = max(0, fx - pad)
+        fy1 = max(0, fy - pad)
+        fx2 = min(iw, fx + fw + pad)
+        fy2 = min(ih, fy + fh + pad)
+        return img_bgr[fy1:fy2, fx1:fx2]
+
+    def _clip_embed_image(img_bgr):
+        """Get CLIP embedding for a BGR image."""
+        pil = PILImage.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+        with torch.no_grad():
+            inp = clip_proc(images=pil, return_tensors="pt")
+            feat = _to_tensor(clip_model.get_image_features(
+                pixel_values=inp["pixel_values"].to(device)
+            ))
+            feat = feat / feat.norm(dim=-1, keepdim=True)
+        return feat
+
+    # ── Encode target image (face-level + full-image) ──
+    target_feat = None       # full image embedding (fallback)
+    target_face_feat = None  # face-only embedding (primary)
+    if target_image:
+        target_bytes = await target_image.read()
+        target_np = np.frombuffer(target_bytes, dtype=np.uint8)
+        target_bgr = cv2.imdecode(target_np, cv2.IMREAD_COLOR)
+
+        # Full-image CLIP embedding (fallback)
+        target_feat = _clip_embed_image(target_bgr)
+
+        # Try to extract face for face-level matching
+        face_crop = _detect_face_crop(target_bgr)
+        if face_crop is not None and face_crop.size > 0:
+            target_face_feat = _clip_embed_image(face_crop)
+            logger.info("[FindObject] Face detected in target image — using face-level matching")
+
+    # ── Build text prompts for facial attribute mode ──
+    text_feats = None
+    if search_mode == "facial":
+        try:
+            attrs = json.loads(facial_attributes) if isinstance(facial_attributes, str) else facial_attributes
+        except Exception:
+            attrs = {}
+        prompts = []
+        parts = []
+        gender = attrs.get("gender", "")
+        if gender:
+            parts.append(f"a {gender} person")
+        clothing = attrs.get("clothing_color", "")
+        if clothing:
+            parts.append(f"wearing {clothing} clothing")
+        hair = attrs.get("hair_color", "")
+        if hair:
+            parts.append(f"with {hair} hair")
+        age = attrs.get("age_group", "")
+        if age:
+            parts.append(f"who is {age}")
+        glasses = attrs.get("glasses", "")
+        if glasses == "yes":
+            parts.append("wearing glasses")
+        elif glasses == "no":
+            parts.append("without glasses")
+        skin = attrs.get("skin_tone", "")
+        if skin:
+            parts.append(f"with {skin} skin")
+
+        if parts:
+            prompts = [" ".join(parts)]
+        if prompts:
+            with torch.no_grad():
+                t_in = clip_proc(text=prompts, return_tensors="pt", padding=True)
+                # Move individual tensors to device (some transformers versions
+                # don't support .to(device) on BatchEncoding)
+                t_in_device = {k: v.to(device) if hasattr(v, 'to') else v for k, v in t_in.items()}
+                text_feats = _to_tensor(clip_model.get_text_features(**t_in_device))
+                text_feats = text_feats / text_feats.norm(dim=-1, keepdim=True)
+
+    if target_feat is None and text_feats is None:
+        raise HTTPException(400, "Provide a target image or facial attributes to search for")
 
     # ── Get video path ──
     tmp_video = None
@@ -170,10 +338,14 @@ async def find_object(
     else:
         raise HTTPException(400, "Provide either a video file or live_url")
 
-    # ── Scan frames ──
-    SIMILARITY_THRESHOLD = 0.72
-    FRAME_INTERVAL = 30   # check every 30 frames (~1s at 30fps)
+    # ── Scan frames with YOLO person detection + CLIP crop matching ──
+    SIMILARITY_THRESHOLD = 0.62   # CLIP person-crop similarity — raised from 0.52
+    FRAME_INTERVAL = 15           # every 15 frames (~0.5s at 30fps)
+    YOLO_PERSON_CONF = 0.25      # confidence for YOLO person detection
+    MAX_MATCHES = 20             # cap results to top N
+    DEDUP_SIM = 0.80             # same-person dedup threshold (CLIP crop-to-crop)
     matches = []
+    match_feats = []              # CLIP embeddings of matched crops for dedup
 
     try:
         cap = cv2.VideoCapture(video_path)
@@ -191,28 +363,128 @@ async def find_object(
             if frame_idx % FRAME_INTERVAL == 0:
                 timestamp = frame_idx / fps
 
-                # Convert frame to PIL
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_pil = PILImage.fromarray(frame_rgb)
+                # Step 1: Detect all people in this frame using YOLO
+                yolo_results = yolo(
+                    frame, verbose=False, conf=YOLO_PERSON_CONF,
+                    classes=[0],  # class 0 = person in COCO
+                )
 
-                # CLIP similarity
-                with torch.no_grad():
-                    f_inputs = clip_proc(images=frame_pil, return_tensors="pt")
-                    frame_feat = clip_model.get_image_features(pixel_values=f_inputs["pixel_values"].to(device))
-                    frame_feat = frame_feat / frame_feat.norm(dim=-1, keepdim=True)
-                    similarity = float((target_feat @ frame_feat.T).squeeze())
+                for result in yolo_results:
+                    if result.boxes is None:
+                        continue
+                    for box in result.boxes:
+                        x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
+                        h_frame, w_frame = frame.shape[:2]
 
-                if similarity >= SIMILARITY_THRESHOLD:
-                    # Capture thumbnail as base64 JPEG
-                    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                    thumb_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode()
+                        # Clamp to frame bounds
+                        x1 = max(0, x1); y1 = max(0, y1)
+                        x2 = min(w_frame, x2); y2 = min(h_frame, y2)
 
-                    matches.append({
-                        "timestamp":   round(timestamp, 2),
-                        "confidence":  round(similarity, 3),
-                        "description": f"Match at {int(timestamp//60):02d}:{int(timestamp%60):02d} — similarity {similarity:.0%}",
-                        "thumbnail":   thumb_b64,
-                    })
+                        # Skip tiny crops
+                        crop_w = x2 - x1
+                        crop_h = y2 - y1
+                        if crop_w < 10 or crop_h < 10:
+                            continue
+
+                        # Step 2: Extract person crop and encode with CLIP
+                        person_crop = frame[y1:y2, x1:x2]
+                        if person_crop.size == 0:
+                            continue
+
+                        # Get full-body CLIP embedding
+                        crop_feat = _clip_embed_image(person_crop)
+
+                        # Try face-level matching if we have a target face
+                        crop_face_feat = None
+                        if target_face_feat is not None:
+                            face_in_crop = _detect_face_crop(person_crop)
+                            if face_in_crop is not None and face_in_crop.size > 0:
+                                crop_face_feat = _clip_embed_image(face_in_crop)
+
+                        # Step 3: Compute similarity scores
+                        best_score = 0.0
+
+                        # Score against target image (visual match)
+                        if target_feat is not None:
+                            # Primary: face-to-face comparison (much more accurate)
+                            if target_face_feat is not None and crop_face_feat is not None:
+                                face_sim = float((crop_face_feat @ target_face_feat.T).squeeze())
+                                body_sim = float((crop_feat @ target_feat.T).squeeze())
+                                # Weight face match heavily (70% face, 30% body)
+                                best_score = max(best_score, 0.7 * face_sim + 0.3 * body_sim)
+                            else:
+                                # Fallback: full-body comparison
+                                img_sim = float((crop_feat @ target_feat.T).squeeze())
+                                best_score = max(best_score, img_sim)
+
+                        # Score against text prompts (facial attribute mode)
+                        if text_feats is not None:
+                            text_sims = (crop_feat @ text_feats.T).squeeze()
+                            text_score = float(text_sims.max() if text_sims.dim() > 0 else text_sims)
+                            # Blend: if both image and text, average. If text only, use text.
+                            if target_feat is not None:
+                                best_score = 0.6 * best_score + 0.4 * text_score
+                            else:
+                                best_score = text_score
+
+                        # Step 4: Record match if above threshold
+                        if best_score >= SIMILARITY_THRESHOLD:
+                            # ── CLIP dedup: check if this person was already matched ──
+                            # Compare this crop's CLIP embedding against all existing
+                            # match embeddings. If similarity > DEDUP_SIM, it's the
+                            # same person — keep the one with higher score.
+                            is_duplicate = False
+                            dup_idx = -1
+                            for mi, mf in enumerate(match_feats):
+                                sim = float((crop_feat @ mf.T).squeeze())
+                                if sim > DEDUP_SIM:
+                                    is_duplicate = True
+                                    dup_idx = mi
+                                    break
+
+                            if is_duplicate and dup_idx >= 0:
+                                # Same person — keep better match
+                                if best_score > matches[dup_idx]["confidence"]:
+                                    # Replace with this better match
+                                    pass  # fall through to overwrite
+                                else:
+                                    continue  # existing match is better, skip
+
+                            # Draw bbox on FULL FRAME for thumbnail
+                            thumb_frame = frame.copy()
+                            cv2.rectangle(thumb_frame, (x1, y1), (x2, y2), (57, 255, 20), 3)
+                            cv2.putText(thumb_frame, f"{best_score:.0%} MATCH",
+                                        (x1, max(y1 - 8, 16)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (57, 255, 20), 2)
+                            # Resize to reasonable thumbnail size
+                            thumb_h = 200
+                            thumb_w = int(thumb_h * w_frame / h_frame)
+                            thumb_frame = cv2.resize(thumb_frame, (thumb_w, thumb_h))
+
+                            _, buf = cv2.imencode(
+                                ".jpg", thumb_frame,
+                                [cv2.IMWRITE_JPEG_QUALITY, 75]
+                            )
+                            thumb_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode()
+
+                            match_data = {
+                                "timestamp":   round(timestamp, 2),
+                                "confidence":  round(best_score, 3),
+                                "description": (
+                                    f"Person detected at "
+                                    f"{int(timestamp//60):02d}:{int(timestamp%60):02d} "
+                                    f"— similarity {best_score:.0%}"
+                                ),
+                                "thumbnail":   thumb_b64,
+                            }
+
+                            if is_duplicate and dup_idx >= 0:
+                                # Overwrite existing weaker match
+                                matches[dup_idx] = match_data
+                                match_feats[dup_idx] = crop_feat
+                            else:
+                                matches.append(match_data)
+                                match_feats.append(crop_feat)
 
             frame_idx += 1
 
@@ -222,9 +494,19 @@ async def find_object(
             try: os.unlink(tmp_video.name)
             except: pass
 
-    # Sort by confidence descending
+    # Sort by confidence descending and cap to MAX_MATCHES
     matches.sort(key=lambda x: x["confidence"], reverse=True)
-    return {"matches": matches, "total_scanned": frame_idx, "threshold": SIMILARITY_THRESHOLD}
+    matches = matches[:MAX_MATCHES]
+
+    # Clean up match_feats from GPU memory
+    del match_feats
+
+    return {
+        "matches": matches,
+        "total_scanned": frame_idx,
+        "threshold": SIMILARITY_THRESHOLD,
+        "search_mode": search_mode,
+    }
 
 
 # ── Upload & start ─────────────────────────────────────────────────────────────

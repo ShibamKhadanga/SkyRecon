@@ -30,12 +30,21 @@ def scan_video_facial_attributes(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Load CLIP
-    clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-    clip_proc  = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-
-    # Load YOLO for person detection
-    yolo = YOLO("yolov8s.pt")
+    # Load CLIP — use large model for better person re-identification,
+    # with automatic fallback to base model
+    for clip_name in [
+        "openai/clip-vit-large-patch14",
+        "openai/clip-vit-base-patch32",
+    ]:
+        try:
+            clip_model = CLIPModel.from_pretrained(clip_name).to(device)
+            clip_proc  = CLIPProcessor.from_pretrained(clip_name)
+            clip_model.eval()
+            logger.info(f"[FaceFinder] Loaded CLIP: {clip_name}")
+            break
+        except Exception as e:
+            logger.warning(f"[FaceFinder] Could not load {clip_name}: {e}")
+            continue
 
     # Build text prompts from attributes
     prompts = _build_prompts(attributes)
@@ -48,6 +57,8 @@ def scan_video_facial_attributes(
             with torch.no_grad():
                 t_in = clip_proc(images=target_pil, return_tensors="pt")
                 target_feat = clip_model.get_image_features(pixel_values=t_in["pixel_values"].to(device))
+                if not isinstance(target_feat, torch.Tensor):
+                    target_feat = target_feat.pooler_output if hasattr(target_feat, 'pooler_output') else target_feat[0]
                 target_feat = target_feat / target_feat.norm(dim=-1, keepdim=True)
         except Exception as e:
             logger.warning(f"[FaceFinder] Could not encode target image: {e}")
@@ -56,12 +67,18 @@ def scan_video_facial_attributes(
     text_feats = None
     if prompts:
         with torch.no_grad():
-            t_in = clip_proc(text=prompts, return_tensors="pt", padding=True).to(device)
-            text_feats = clip_model.get_text_features(**t_in)
+            t_in = clip_proc(text=prompts, return_tensors="pt", padding=True)
+            t_in_device = {k: v.to(device) if hasattr(v, 'to') else v for k, v in t_in.items()}
+            text_feats = clip_model.get_text_features(**t_in_device)
+            if not isinstance(text_feats, torch.Tensor):
+                text_feats = text_feats.pooler_output if hasattr(text_feats, 'pooler_output') else text_feats[0]
             text_feats = text_feats / text_feats.norm(dim=-1, keepdim=True)
 
-    FRAME_INTERVAL = 15
-    SIMILARITY_THRESHOLD = 0.22
+    # Load YOLO for person detection
+    yolo = YOLO("yolov8s.pt")
+
+    FRAME_INTERVAL = 10
+    SIMILARITY_THRESHOLD = 0.24
     matches = []
 
     cap = cv2.VideoCapture(video_path)
@@ -93,6 +110,8 @@ def scan_video_facial_attributes(
                     with torch.no_grad():
                         c_in = clip_proc(images=crop_pil, return_tensors="pt")
                         crop_feat = clip_model.get_image_features(pixel_values=c_in["pixel_values"].to(device))
+                        if not isinstance(crop_feat, torch.Tensor):
+                            crop_feat = crop_feat.pooler_output if hasattr(crop_feat, 'pooler_output') else crop_feat[0]
                         crop_feat = crop_feat / crop_feat.norm(dim=-1, keepdim=True)
 
                     score = 0.0

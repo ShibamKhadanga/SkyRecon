@@ -13,10 +13,11 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Frontend-React%2019%20+%20Vite%205-61DAFB?style=flat-square&logo=react" />
   <img src="https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square&logo=fastapi" />
-  <img src="https://img.shields.io/badge/AI-YOLOv8%20+%20ByteTrack-FF6F00?style=flat-square" />
+  <img src="https://img.shields.io/badge/AI-YOLOv8%20+%20CLIP%20+%20ByteTrack-FF6F00?style=flat-square" />
   <img src="https://img.shields.io/badge/Database-PostgreSQL%20%7C%20Neon-4169E1?style=flat-square&logo=postgresql" />
   <img src="https://img.shields.io/badge/Maps-Leaflet%20GIS-199900?style=flat-square&logo=leaflet" />
   <img src="https://img.shields.io/badge/Segmentation-SegFormer--B2-764ABC?style=flat-square" />
+  <img src="https://img.shields.io/badge/Face%20Detection-OpenCV%20Haar-5C3EE8?style=flat-square&logo=opencv" />
   <img src="https://img.shields.io/badge/Mobile-PWA%20Ready-5A0FC8?style=flat-square&logo=pwa" />
   <img src="https://img.shields.io/badge/Backend-HuggingFace%20Spaces-FFD21E?style=flat-square&logo=huggingface" />
   <img src="https://img.shields.io/badge/Frontend-Vercel-000000?style=flat-square&logo=vercel" />
@@ -42,12 +43,14 @@
 
 SkyRecon is a full-stack AI drone intelligence platform that **actually processes drone video** using a multi-model AI pipeline. Upload a drone video or image, select what you want to detect, and the platform runs real computer vision inference frame by frame and gives you a detailed report with real counts, area coverage, and per-object screenshots.
 
-Four core modules:
+### Core Modules
 
-- **Mapping & Survey** — detect 25 categories from aerial footage using specialized fine-tuned models. Get real unique object counts via ByteTrack, area coverage in m², one cropped screenshot per unique object with timestamp, and downloadable PDF/DOCX reports.
-- **Disaster Response** — scan footage for floods, fire, structural damage, fallen poles. Each event gets severity 1-5, a screenshot from the exact video frame, resource estimates, and an actionable report.
-- **Live Drone Feed** — real-time video streaming with telemetry HUD overlay, in-browser recording, and multi-protocol support (FPV USB receiver, MJPEG, HLS, Direct MP4).
-- **Object Finder** — two search modes: **Facial Attributes** (filter by gender, age, hair color, glasses, skin tone, clothing) and **Visual Match** (CLIP-based target photo similarity). Scans uploaded video or live stream and returns every appearance with timestamp, confidence, and thumbnail.
+| Module | Description |
+|---|---|
+| **Mapping & Survey** | Detect 25 categories from aerial footage using specialized fine-tuned models. Get real unique object counts via ByteTrack + CLIP visual deduplication, area coverage in m², full-frame annotated screenshots with bounding boxes, and downloadable PDF/DOCX reports. |
+| **Disaster Response** | Scan footage for floods, fire, structural damage, fallen poles. Each event gets severity 1–5, a screenshot from the exact video frame, resource estimates, and an actionable report. |
+| **Live Drone Feed** | Real-time video streaming with telemetry HUD overlay, in-browser recording, and multi-protocol support (FPV USB receiver, MJPEG, HLS, Direct MP4). |
+| **Object Finder** | Two search modes: **Facial Attributes** (filter by gender, age, hair, glasses, skin tone, clothing) and **Visual Match** (face-level CLIP matching with OpenCV Haar face detection). Scans uploaded video or live stream and returns every appearance with timestamp, confidence, full-frame thumbnail, and PDF export. |
 
 ---
 
@@ -74,16 +77,20 @@ The pipeline automatically selects the best model per category. On deployment, a
 
 ## Detection Pipeline
 
-**YOLO-detectable categories** (People, Vehicles, Animals...):
+### YOLO-Detectable Categories (People, Vehicles, Animals...)
+
 ```
 Frame → CLAHE Enhancement → Resize 640px → YOLOv8 + ByteTrack
      → Aerial misclassification fix (kite→person etc.)
      → Characteristics filter (2-Wheeler, color, etc.)
      → Unique object tracking (one count per track ID)
-     → Cropped screenshot per new unique object
+     → Full-frame annotated screenshot per detection
+     → CLIP visual deduplication (post-processing)
+     → DB pruning (delete duplicate detection records)
 ```
 
-**Aerial-specific categories** (Trees, Water, Buildings, Roads, Fire...):
+### Aerial-Specific Categories (Trees, Water, Buildings, Roads, Fire...)
+
 ```
 Frame → SegFormer-B2 segmentation + OpenCV heuristics
      → ExG vegetation index (trees/plants)
@@ -91,6 +98,104 @@ Frame → SegFormer-B2 segmentation + OpenCV heuristics
      → Edge detection (poles, bridges, pipelines)
      → Grid-based deduplication
 ```
+
+### Object Finder Pipeline (Visual Match Mode)
+
+```
+Target Photo → OpenCV Haar face detection → Face crop + body crop
+            → CLIP embedding (face + full image)
+
+Video Frame → YOLO person detection → Person crop
+           → OpenCV face detection within crop
+           → CLIP face-to-face similarity (70% weight)
+           → CLIP body-to-body similarity (30% weight)
+           → CLIP dedup across matches (same person = keep best)
+           → Top 20 matches sorted by confidence
+```
+
+---
+
+## Libraries Used
+
+### Frontend (JavaScript / React)
+
+| Library | Version | Purpose |
+|---|---|---|
+| **React** | 19.1 | UI framework — component-based rendering |
+| **React DOM** | 19.1 | DOM rendering for React components |
+| **Vite** | 5.4 | Build tool — HMR, fast dev server, production bundler |
+| **React Router DOM** | 7.15 | Client-side routing (10 pages) |
+| **TailwindCSS** | 4.3 | Utility-first CSS framework for styling |
+| **@tailwindcss/vite** | 4.3 | Vite-native TailwindCSS plugin |
+| **@vitejs/plugin-react** | 4.3 | React Fast Refresh + JSX transform for Vite |
+| **Framer Motion** | 12.40 | Animation library — page transitions, micro-animations |
+| **Leaflet** | 1.9 | Interactive GIS maps with markers and heatmaps |
+| **React-Leaflet** | 5.0 | React wrapper for Leaflet maps |
+| **Recharts** | 3.8 | Chart library (bar, line, pie charts for dashboard) |
+| **Lucide React** | 1.17 | Icon library (consistent SVG icons) |
+| **TypeScript** | 6.0 | Static type checking |
+
+### Backend (Python / FastAPI)
+
+| Library | Version | Purpose |
+|---|---|---|
+| **FastAPI** | ≥0.115 | REST API framework — async, auto-docs (Swagger/OpenAPI) |
+| **Uvicorn** | ≥0.30 | ASGI server — serves FastAPI with auto-reload |
+| **SQLAlchemy** | ≥2.0 | ORM + raw SQL — PostgreSQL database access |
+| **psycopg2-binary** | ≥2.9 | PostgreSQL adapter (binary wheel, no build tools) |
+| **Pydantic** | ≥2.9 | Data validation — request/response schemas |
+| **Pydantic Settings** | ≥2.5 | Environment variable management via `.env` |
+| **python-multipart** | ≥0.0.12 | File upload parsing for FastAPI endpoints |
+| **aiofiles** | ≥24.1 | Async file I/O for uploads |
+| **httpx** | ≥0.27 | Async HTTP client — SSE stream proxy, camera stream relay |
+
+### AI / Computer Vision (Python)
+
+| Library | Version | Purpose |
+|---|---|---|
+| **PyTorch** | ≥2.3 | Deep learning runtime — tensor operations, GPU acceleration |
+| **TorchVision** | ≥0.18 | Vision utilities — transforms, pretrained model support |
+| **Ultralytics** | ≥8.3 | YOLOv8 object detection + ByteTrack multi-object tracking |
+| **OpenCV** (headless) | ≥4.10 | Frame extraction, Haar cascade face detection, CLAHE enhancement, HSV color analysis, edge detection, contour detection, image annotation |
+| **Transformers** (HuggingFace) | ≥4.40 | SegFormer-B2 (aerial segmentation) + CLIP `openai/clip-vit-base-patch32` (object finder visual matching + mapping visual dedup) |
+| **Accelerate** | ≥0.30 | HuggingFace GPU inference support for SegFormer |
+| **Pillow** | ≥10.0 | Image processing — format conversion, thumbnail generation |
+| **NumPy** | ≥1.26 | Numerical arrays — image manipulation, similarity computation |
+
+### Report Generation (Python)
+
+| Library | Version | Purpose |
+|---|---|---|
+| **ReportLab** | ≥4.2 | PDF report generation with screenshots and tables |
+| **python-docx** | ≥1.1 | DOCX (Word) report generation |
+| **Jinja2** | ≥3.1 | Template engine for report formatting |
+
+### Infrastructure / DevOps
+
+| Library / Service | Purpose |
+|---|---|
+| **Docker** | Container for HuggingFace Spaces deployment |
+| **python-dotenv** | Load `.env` files for local development |
+| **Vercel** | Frontend static hosting (free tier) |
+| **HuggingFace Spaces** | Backend Docker hosting (free CPU / paid GPU) |
+| **Neon** | Serverless PostgreSQL database (free 512 MB) |
+| **GitHub Releases** | Model weight hosting (up to 2 GB/file) |
+
+### Key AI Techniques Used
+
+| Technique | Where Used | Description |
+|---|---|---|
+| **YOLOv8 Object Detection** | Mapping, Disaster, Find Object | Real-time object detection across 80 COCO classes + 7 custom-trained models |
+| **ByteTrack** | Mapping | Multi-object tracking — assigns persistent IDs across video frames |
+| **CLIP Visual Matching** | Object Finder, Mapping Dedup | Cosine similarity between image embeddings for person re-identification |
+| **CLIP Face-to-Face** | Object Finder | OpenCV Haar cascade detects faces → CLIP compares face crops (not full-body) for higher accuracy |
+| **CLIP Visual Dedup** | Mapping | Post-processing: pairwise CLIP comparison of all person crops, merging duplicates (sim > 0.82) with same-frame protection |
+| **SegFormer-B2** | Trees, Water, Buildings | Semantic segmentation — pixel-level classification of aerial imagery |
+| **CLAHE Enhancement** | All Detection | Contrast-limited adaptive histogram equalization — improves detection in shadowed/overexposed frames |
+| **ExG Vegetation Index** | Trees, Plants | `ExG = 2*G - R - B` — isolates green vegetation from aerial RGB |
+| **HSV Color Analysis** | Fire, Water, Roads, Solar | Hue-Saturation-Value masking for material/surface classification |
+| **Haar Cascade Face Detection** | Object Finder | OpenCV's built-in frontal face detector — extracts face crops from target photos and person detections |
+| **DB Pruning** | Mapping | After CLIP dedup, excess detection records are deleted from PostgreSQL — keeps only top N by confidence |
 
 ---
 
@@ -114,10 +219,11 @@ Frame → SegFormer-B2 segmentation + OpenCV heuristics
 | FastAPI | REST API |
 | SQLAlchemy 2.0 + PostgreSQL (Neon) | Database |
 | Ultralytics YOLOv8 | Detection + ByteTrack tracking |
-| OpenCV | Frame extraction + heuristic detection |
+| OpenCV | Frame extraction + face detection + heuristic detection |
 | PyTorch | Deep learning runtime |
 | SegFormer-B2 (HuggingFace) | Aerial semantic segmentation |
-| CLIP `openai/clip-vit-base-patch32` | Object Finder feature matching |
+| CLIP `openai/clip-vit-base-patch32` | Object Finder face matching + Mapping visual dedup |
+| OpenCV Haar Cascade | Face detection (target photo + person crops) |
 | ReportLab + python-docx | PDF + DOCX report generation |
 | Docker | Container for HuggingFace Spaces deployment |
 
@@ -175,7 +281,7 @@ SkyRecon/
 │       ├── AdminPage.jsx             # Category & system management
 │       ├── LiveFeedPage.jsx          # Real-time drone stream + telemetry + recording
 │       ├── RecordingsPage.jsx        # Playback, download & manage saved recordings
-│       └── FindPage.jsx              # AI object finder (Facial Attributes + CLIP visual match)
+│       └── FindPage.jsx              # AI object finder (face matching + CLIP visual match + PDF export)
 │
 ├── public/
 │   └── skyrecon-favicon.svg          # App favicon
@@ -194,13 +300,13 @@ SkyRecon/
     │   ├── main.py                   # FastAPI app + CORS + routes
     │   ├── database.py               # SQLAlchemy engine + DB init
     │   ├── ai/
-    │   │   ├── video_processor.py    # Full mapping pipeline (YOLO + ByteTrack + SegFormer)
+    │   │   ├── video_processor.py    # Full mapping pipeline (YOLO + ByteTrack + SegFormer + CLIP dedup)
     │   │   ├── disaster_engine.py    # Disaster classification + severity scoring
     │   │   ├── area_calculator.py    # Bounding box → real-world m²
     │   │   ├── face_finder.py        # Facial attribute search (YOLO person + CLIP matching)
     │   │   └── report_generator.py   # PDF + DOCX with screenshots
     │   ├── api/v1/
-    │   │   ├── analysis.py           # Upload, status, results, reports, object finder
+    │   │   ├── analysis.py           # Upload, status, results, reports, object finder (face-level CLIP)
     │   │   ├── categories.py         # Category CRUD
     │   │   ├── dashboard.py          # Stats + recent analyses + map markers
     │   │   └── stream.py             # SSE real-time progress streaming
@@ -216,7 +322,7 @@ SkyRecon/
     │   └── procedures.sql            # 12 PL/pgSQL stored procedures
     │
     ├── uploads/                      # Uploaded video/image files (runtime)
-    ├── screenshots/                  # Per-object cropped screenshots (runtime)
+    ├── screenshots/                  # Full-frame annotated screenshots (runtime)
     ├── reports/                      # Generated PDF/DOCX reports (runtime)
     │
     ├── SkyRecon_VisDrone_Training.ipynb      # Training notebook: VisDrone people & vehicles
@@ -273,6 +379,8 @@ uvicorn app.main:app --reload --port 8000
 On first startup: auto-creates DB tables, runs stored procedures, seeds 25 categories.
 
 SegFormer-B2 (~300 MB) downloads automatically from HuggingFace on first tree/building/water detection.
+
+CLIP model (`openai/clip-vit-base-patch32` ~600 MB) downloads automatically on first Object Finder or Mapping analysis with visual dedup.
 
 > Tip: For GPU inference with SegFormer, install `accelerate` via `pip install accelerate`.
 
@@ -391,14 +499,14 @@ Base URL (deployed): `https://shibamkhadanga-skyrecon.hf.space`
 | `GET` | `/api/v1/dashboard/recent` | Recent analyses |
 | `GET` | `/api/v1/dashboard/map-markers` | GIS map markers |
 | `GET` | `/api/v1/stream/{id}` | SSE real-time progress stream |
-| `POST` | `/api/v1/analysis/find-object` | CLIP-based object search in video or live stream |
+| `POST` | `/api/v1/analysis/find-object` | Face-level CLIP matching + visual search in video or live stream |
 
 Static file mounts (served directly by FastAPI):
 
 | Mount | Directory | Contents |
 |---|---|---|
 | `/uploads/*` | `backend/uploads/` | Uploaded video/image files |
-| `/screenshots/*` | `backend/screenshots/` | Per-object cropped screenshots |
+| `/screenshots/*` | `backend/screenshots/` | Full-frame annotated screenshots |
 | `/reports/*` | `backend/reports/` | Generated PDF/DOCX report files |
 
 Interactive docs: `http://localhost:8000/api/docs` or `https://shibamkhadanga-skyrecon.hf.space/api/docs`
@@ -441,19 +549,45 @@ Features:
 
 Access at `/find`. Two search modes for finding people or objects in drone footage.
 
+### Visual Match Mode (Recommended for Person Search)
+- Upload a target photo (face, person, vehicle, any object)
+- Backend pipeline:
+  1. **OpenCV Haar cascade** detects face in target photo → crops face region
+  2. **CLIP** encodes both face crop and full image as embeddings
+  3. For each video frame: **YOLO** detects people → **OpenCV** detects face in each person crop → **CLIP** compares face-to-face (70%) + body-to-body (30%)
+  4. **CLIP dedup** across matches — same person seen multiple times → keep only the best match
+  5. Results capped at top 20, sorted by confidence
+- **PDF export** — styled report with thumbnails, timestamps, and confidence scores
+
 ### Facial Attributes Mode
 - Filter by: gender, age group, hair color, facial hair, glasses, skin tone, clothing color
 - Optionally upload a reference face photo to improve accuracy
-- Backend: YOLO person detection → face crop → CLIP attribute matching
+- Backend: YOLO person detection → CLIP text prompt matching
 
-### Visual Match Mode
-- Upload a target photo (person, vehicle, any object)
-- Backend: CLIP feature embedding → frame-by-frame cosine similarity
-
-**Common features:**
+### Common Features
 - Video source: uploaded file **or** live stream (MJPEG / HLS / FPV USB)
 - Backend: `POST /api/v1/analysis/find-object`
-- Output: timestamp, confidence score, cropped thumbnail per match, exportable results
+- Output: timestamp, confidence score, full-frame thumbnail with bbox overlay per match
+- Export: PDF report with thumbnails and match data
+
+---
+
+## Mapping & Survey — Accuracy Features
+
+### CLIP Visual Deduplication
+After YOLO + ByteTrack processing is complete, a **post-processing dedup step** runs:
+
+1. All unique person/object crops are encoded with CLIP (`openai/clip-vit-base-patch32`)
+2. Pairwise cosine similarity is computed between all crop embeddings
+3. If two crops have similarity > 0.82 AND were **NOT first seen in the same frame** (same-frame protection), the duplicate is merged away
+4. After dedup, excess detection records are **deleted from the PostgreSQL database** — only the top N detections by confidence are kept
+5. The final unique count is written to `total_objects` in the analysis record
+
+### Same-Frame Protection
+Detections first seen within 1.5 seconds of each other are **never merged**, even if visually similar. This prevents different people standing side-by-side from being collapsed into one count.
+
+### Full-Frame Screenshots
+Each detection screenshot shows the **entire video frame** with all detected objects highlighted by green bounding boxes, rather than individual cropped thumbnails. This provides visual context for verification.
 
 ---
 
@@ -472,7 +606,7 @@ Access at `/recordings`. All recordings captured from the Live Feed page are sto
 
 | Category | Model | Method |
 |---|---|---|
-| People | `skyrecon_visdrone.pt` | YOLOv8 + ByteTrack |
+| People | `skyrecon_visdrone.pt` | YOLOv8 + ByteTrack + CLIP visual dedup |
 | Vehicles | `skyrecon_visdrone.pt` | YOLOv8 + ByteTrack + char filter |
 | Animals | `skyrecon_visdrone.pt` | YOLOv8 + ByteTrack |
 | Road Potholes | `skyrecon_rdd2022.pt` | YOLOv8 + dark blob heuristic |
@@ -508,7 +642,7 @@ Every PDF/DOCX report includes:
 - Detection summary (unique count, area covered, coverage %)
 - Category breakdown table
 - Top detections by confidence with timestamps
-- One cropped screenshot per unique object with timestamp + confidence
+- Full-frame annotated screenshots with bounding boxes, timestamps, and confidence
 - AI planning recommendations
 
 ---

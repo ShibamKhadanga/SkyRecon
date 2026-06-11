@@ -468,6 +468,51 @@ export default function FindPage() {
   const [matches, setMatches]         = useState([])
   const [searchDone, setSearchDone]   = useState(false)
   const [error, setError]             = useState('')
+
+  // ── Export Results as PDF ──
+  const handleExportResults = () => {
+    if (!matches.length) return
+    const title = `SkyRecon — Find Object Report`
+    const date = new Date().toLocaleString()
+    const rows = matches.map((m, i) => `
+      <tr>
+        <td style="padding:8px;border:1px solid #333;text-align:center">${i + 1}</td>
+        <td style="padding:8px;border:1px solid #333">
+          ${m.thumbnail ? `<img src="${m.thumbnail}" style="max-width:240px;border-radius:6px"/>` : 'N/A'}
+        </td>
+        <td style="padding:8px;border:1px solid #333;text-align:center">${m.timestamp}s</td>
+        <td style="padding:8px;border:1px solid #333;text-align:center;font-weight:bold;color:#39ff14">${(m.confidence * 100).toFixed(1)}%</td>
+        <td style="padding:8px;border:1px solid #333">${m.description || ''}</td>
+      </tr>
+    `).join('')
+    const html = `<!DOCTYPE html><html><head><title>${title}</title>
+      <style>
+        body{font-family:Arial,sans-serif;background:#0a0a0a;color:#e0e0e0;padding:24px}
+        h1{color:#39ff14;margin-bottom:4px} h2{color:#888;font-weight:normal;margin-top:0}
+        table{border-collapse:collapse;width:100%;margin-top:16px}
+        th{background:#1a1a2e;color:#39ff14;padding:10px;border:1px solid #333;text-align:left}
+        tr:nth-child(even){background:#111} tr:nth-child(odd){background:#0a0a0a}
+        .stats{display:flex;gap:24px;margin:12px 0}
+        .stat{background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:12px 20px;text-align:center}
+        .stat-val{font-size:24px;font-weight:bold;color:#39ff14} .stat-lbl{font-size:11px;color:#888}
+        @media print{body{background:white;color:black} th{background:#ddd;color:black} tr{background:white!important} .stat{border-color:#ccc} .stat-val{color:#0a7e0a}}
+      </style></head><body>
+      <h1>🛩️ ${title}</h1>
+      <h2>Generated: ${date}</h2>
+      <div class="stats">
+        <div class="stat"><div class="stat-val">${matches.length}</div><div class="stat-lbl">Matches Found</div></div>
+        <div class="stat"><div class="stat-val">${matches.length > 0 ? (matches[0].confidence * 100).toFixed(0) + '%' : 'N/A'}</div><div class="stat-lbl">Best Confidence</div></div>
+        <div class="stat"><div class="stat-val">${searchMode === 'visual' ? 'Visual Match' : 'Facial Attributes'}</div><div class="stat-lbl">Search Mode</div></div>
+      </div>
+      <table><thead><tr>
+        <th>#</th><th>Thumbnail</th><th>Timestamp</th><th>Confidence</th><th>Description</th>
+      </tr></thead><tbody>${rows}</tbody></table>
+    </body></html>`
+    const win = window.open('', '_blank')
+    win.document.write(html)
+    win.document.close()
+    setTimeout(() => win.print(), 500)
+  }
   const [processingLog, setProcessingLog] = useState([])
   const abortRef = useRef(null)
   const liveVideoRef = useRef(null) // ref passed to LivePanel to capture frames
@@ -559,8 +604,24 @@ export default function FindPage() {
           setMatches(data.matches || [])
           setSearchDone(true)
           backendOk = true
+        } else {
+          // Backend returned an error — show the actual message
+          let errMsg = `Backend error (${res.status})`
+          try {
+            const errData = await res.json()
+            errMsg = errData.detail || errData.message || errMsg
+          } catch { /* ignore parse error */ }
+          addLog(`Error: ${errMsg}`)
+          setProgress(100); setProgressMsg(`Error: ${errMsg}`)
+          setSearchDone(true)
+          backendOk = true  // don't show generic "Backend not available"
         }
-      } catch (_) { clearInterval(timer) }
+      } catch (fetchErr) {
+        clearInterval(timer)
+        if (fetchErr?.name !== 'AbortError') {
+          addLog(`Network error: ${fetchErr?.message || 'Cannot reach backend'}`)
+        }
+      }
 
       if (!backendOk) {
         clearInterval(timer)
@@ -850,7 +911,7 @@ export default function FindPage() {
           </div>
           {matches.length > 0 && (
             <div className="px-3 pb-3 flex-shrink-0">
-              <button className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-xs text-[var(--text-secondary)] hover:bg-white/10 transition-colors">
+              <button onClick={handleExportResults} className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-xs text-[var(--text-secondary)] hover:bg-white/10 transition-colors">
                 <Download size={12} /> Export Results ({matches.length} matches)
               </button>
             </div>

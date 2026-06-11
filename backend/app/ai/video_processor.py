@@ -126,6 +126,26 @@ def _run_segformer(
         logger.debug(f"[AI] SegFormer inference failed: {e}")
         return None
 
+# ── PyTorch thread configuration — must run BEFORE any model is loaded ─────────
+# torch.set_num_interop_threads() cannot be called after parallel work starts,
+# so we configure it once at module-import time.
+try:
+    import torch as _torch
+    _cpu_count = os.cpu_count() or 4
+    _intra = max(1, _cpu_count // 2)
+    _inter = max(1, _cpu_count - _intra)
+    try:
+        _torch.set_num_threads(_intra)
+    except RuntimeError:
+        pass  # already set
+    try:
+        _torch.set_num_interop_threads(_inter)
+    except RuntimeError:
+        pass  # already set or parallel work already started
+    logger.info(f"[AI] PyTorch threads configured: intra={_intra}, inter={_inter}")
+except ImportError:
+    pass  # torch not installed yet
+
 # ── Model cache — load once per process, reuse across all analyses ────────────
 _model_cache: dict[str, YOLO] = {}
 
@@ -148,15 +168,9 @@ SPECIALIST_MODELS: dict[str, str] = {
 }
 
 def _get_model(model_path: str) -> YOLO:
-    """Load and cache YOLO model. Auto-detects optimal thread count."""
+    """Load and cache YOLO model."""
     if model_path not in _model_cache:
-        import torch
-        cpu_count = os.cpu_count() or 4
-        intra = max(1, cpu_count // 2)
-        inter = max(1, cpu_count - intra)
-        torch.set_num_threads(intra)
-        torch.set_num_interop_threads(inter)
-        logger.info(f"[AI] Loading model: {model_path} | threads={intra}+{inter}")
+        logger.info(f"[AI] Loading model: {model_path}")
         m = YOLO(model_path)
         m.fuse()
         _model_cache[model_path] = m
@@ -761,10 +775,11 @@ def _correct_aerial_misclassification(
     return cls_name
 
 # ── Per-category inference config ─────────────────────────────────────────────
-# People from aerial view need lower confidence + higher fps to catch walkers
+# People from aerial view need tuned confidence to balance recall vs false positives
 CATEGORY_SETTINGS: dict[str, dict] = {
-    # Aerial-view people are tiny (10-30px) — very low conf needed to catch them
-    "people":             {"fps": 3, "conf": 0.22, "iou": 0.35},
+    # Aerial people: conf=0.25 catches edge/partial people, CLIP dedup handles duplicates.
+    # fps=4 catches fast walkers, iou=0.40 tighter NMS
+    "people":             {"fps": 4, "conf": 0.25, "iou": 0.40},
     # Vehicles are large from above — higher conf reduces road-marking false positives
     "vehicles":           {"fps": 1, "conf": 0.42, "iou": 0.50},
     "animals":            {"fps": 2, "conf": 0.20, "iou": 0.40},
@@ -773,7 +788,8 @@ CATEGORY_SETTINGS: dict[str, dict] = {
     "flood water":        {"fps": 2, "conf": 0.28, "iou": 0.50},
     "water bodies":       {"fps": 1, "conf": 0.28, "iou": 0.50},
     "trees":              {"fps": 1, "conf": 0.28, "iou": 0.50},
-    "plants":             {"fps": 1, "conf": 0.28, "iou": 0.50},
+    # Potted plants are small — low conf + higher fps to catch them from moving drone
+    "plants":             {"fps": 2, "conf": 0.18, "iou": 0.45},
     "road potholes":      {"fps": 2, "conf": 0.28, "iou": 0.42},
     "roads":              {"fps": 1, "conf": 0.28, "iou": 0.50},
     "electric poles":     {"fps": 1, "conf": 0.28, "iou": 0.50},
@@ -793,6 +809,130 @@ CATEGORY_SETTINGS: dict[str, dict] = {
 
 FRAMES_PER_SECOND = 1   # fallback
 MAX_SCREENSHOTS   = 8
+
+# ── SAHI-style tiling for small object categories ─────────────────────────────
+# These categories contain small objects that benefit from running YOLO on
+# overlapping crops of the full-resolution frame instead of downscaling.
+SAHI_CATEGORIES = {"people", "plants", "animals"}
+# Inference resolution override for small-object categories (default is 640)
+SMALL_OBJ_INFER_SIZE = 960
+
+
+def _run_sahi_tiled(
+    model: YOLO,
+    frame: np.ndarray,
+    conf: float,
+    iou: float,
+    overlap: float = 0.25,
+) -> list:
+    """
+    SAHI-style Slicing Aided Hyper Inference.
+    Splits the frame into 4 overlapping quadrants, runs YOLO on each at higher
+    resolution, then merges all detections with NMS to remove duplicates.
+
+    Returns a list of dicts: {x1, y1, x2, y2, cls_id, cls_name, conf, track_id}
+    """
+    h, w = frame.shape[:2]
+    half_h = h // 2
+    half_w = w // 2
+    pad_h = int(half_h * overlap)
+    pad_w = int(half_w * overlap)
+
+    # Define 4 overlapping slices (y1, y2, x1, x2)
+    slices = [
+        (0,              half_h + pad_h, 0,              half_w + pad_w),  # top-left
+        (0,              half_h + pad_h, half_w - pad_w, w),               # top-right
+        (half_h - pad_h, h,              0,              half_w + pad_w),  # bottom-left
+        (half_h - pad_h, h,              half_w - pad_w, w),               # bottom-right
+    ]
+
+    all_boxes = []   # (x1, y1, x2, y2) in original coords
+    all_scores = []
+    all_cls_ids = []
+    all_cls_names = []
+
+    for (sy1, sy2, sx1, sx2) in slices:
+        crop = frame[sy1:sy2, sx1:sx2]
+        if crop.size == 0:
+            continue
+
+        # Run YOLO on this crop (no tracking — tracking is done on merged results)
+        try:
+            results = model(
+                crop, verbose=False, conf=conf, iou=iou,
+                agnostic_nms=False, max_det=300,
+            )
+        except Exception:
+            continue
+
+        for result in results:
+            if result.boxes is None or len(result.boxes) == 0:
+                continue
+            for box in result.boxes:
+                bx1, by1, bx2, by2 = box.xyxy[0].tolist()
+                cls_id = int(box.cls[0])
+                score = float(box.conf[0])
+                # Map crop coords back to original frame coords
+                all_boxes.append([
+                    bx1 + sx1, by1 + sy1,
+                    bx2 + sx1, by2 + sy1,
+                ])
+                all_scores.append(score)
+                all_cls_ids.append(cls_id)
+                all_cls_names.append(model.names[cls_id])
+
+    if not all_boxes:
+        return []
+
+    # NMS to merge duplicate detections from overlapping tiles
+    boxes_np = np.array(all_boxes, dtype=np.float32)
+    scores_np = np.array(all_scores, dtype=np.float32)
+
+    # Per-class NMS
+    keep_indices = []
+    unique_cls = set(all_cls_ids)
+    for c in unique_cls:
+        cls_mask = [i for i, cid in enumerate(all_cls_ids) if cid == c]
+        if not cls_mask:
+            continue
+        cls_boxes = boxes_np[cls_mask]
+        cls_scores = scores_np[cls_mask]
+
+        # Simple greedy NMS
+        order = cls_scores.argsort()[::-1]
+        suppressed = set()
+        for i_idx in range(len(order)):
+            i = order[i_idx]
+            if i in suppressed:
+                continue
+            keep_indices.append(cls_mask[i])
+            for j_idx in range(i_idx + 1, len(order)):
+                j = order[j_idx]
+                if j in suppressed:
+                    continue
+                # Compute IoU
+                ix1 = max(cls_boxes[i][0], cls_boxes[j][0])
+                iy1 = max(cls_boxes[i][1], cls_boxes[j][1])
+                ix2 = min(cls_boxes[i][2], cls_boxes[j][2])
+                iy2 = min(cls_boxes[i][3], cls_boxes[j][3])
+                inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+                area_i = (cls_boxes[i][2] - cls_boxes[i][0]) * (cls_boxes[i][3] - cls_boxes[i][1])
+                area_j = (cls_boxes[j][2] - cls_boxes[j][0]) * (cls_boxes[j][3] - cls_boxes[j][1])
+                union = area_i + area_j - inter
+                if union > 0 and inter / union > iou:
+                    suppressed.add(j)
+
+    merged = []
+    for idx in keep_indices:
+        merged.append({
+            "x1": all_boxes[idx][0], "y1": all_boxes[idx][1],
+            "x2": all_boxes[idx][2], "y2": all_boxes[idx][3],
+            "cls_id": all_cls_ids[idx],
+            "cls_name": all_cls_names[idx],
+            "conf": all_scores[idx],
+            "track_id": None,  # SAHI doesn't track — caller handles dedup
+        })
+    return merged
 
 
 # ── Frame enhancement ─────────────────────────────────────────────────────────
@@ -921,12 +1061,17 @@ def run_mapping_analysis(
             _write_progress(db, analysis_id, 5, 0, f"Video opened: {total_frames} frames @ {fps:.0f}fps. Starting inference...")
 
         # ── Tracking state ──
-        # confirmed_ids: set of unique object keys actually counted
-        # spatial_index: maps spatial_key -> track_key, for dedup when track_id resets
         confirmed_ids: set  = set()
         spatial_index: dict = {}   # spatial_key -> obj_key
         obj_screenshots: dict = {}
         first_seen_at: dict  = {}  # obj_key -> timestamp_sec
+
+        # Proximity dedup: (center_x, center_y, cls_id) per confirmed detection
+        confirmed_centers: list = []
+        DEDUP_RADIUS = 60  # pixels
+
+        # Store crops for CLIP visual dedup post-processing
+        crop_store: dict = {}  # obj_key -> numpy crop array
 
         # Heuristic dedup dict — separate from YOLO confirmed_ids
         heuristic_seen: dict = {}
@@ -975,9 +1120,11 @@ def run_mapping_analysis(
             h, w = frame.shape[:2]
             enhanced = _enhance_frame(frame)
 
-            if w > 640:
-                scale = 640 / w
-                frame_small = cv2.resize(enhanced, (640, int(h * scale)))
+            # Use higher resolution for small-object categories
+            infer_size = SMALL_OBJ_INFER_SIZE if cat_key in SAHI_CATEGORIES else 640
+            if w > infer_size:
+                scale = infer_size / w
+                frame_small = cv2.resize(enhanced, (infer_size, int(h * scale)))
             else:
                 frame_small = enhanced
             h_s, w_s = frame_small.shape[:2]
@@ -996,6 +1143,15 @@ def run_mapping_analysis(
                         heuristic_seen, obj_screenshots, batch, settings
                     )
                 return  # heuristic-only, skip YOLO for this category
+
+            # ── SAHI tiled inference ── (DISABLED: causes overcounting due to
+            # duplicate detections from overlapping tiles. The 960px resolution
+            # is sufficient for small objects. Keep code for future use.)
+            sahi_detections = None
+            # if cat_key in SAHI_CATEGORIES and w >= 1920:
+            #     sahi_detections = _run_sahi_tiled(
+            #         model, enhanced, conf_threshold, iou_threshold
+            #     )
 
             try:
                 results = model.track(
@@ -1018,6 +1174,10 @@ def run_mapping_analysis(
                     max_det=300,
                 )
 
+            # ── Phase 1: Collect all valid detections in this frame ──
+            all_frame_objects = []   # ALL detected objects (for full-frame annotation)
+            new_detections = []     # only NEW unique objects (for batch + CLIP dedup)
+
             for result in results:
                 if result.boxes is None or len(result.boxes) == 0:
                     continue
@@ -1033,12 +1193,9 @@ def run_mapping_analysis(
                     x1o = x1 * (w / w_s); y1o = y1 * (h / h_s)
                     x2o = x2 * (w / w_s); y2o = y2 * (h / h_s)
 
-                    # ── Fix 1: Correct aerial misclassifications ──
-                    # e.g. person from above/behind detected as kite, frisbee, etc.
                     cls_name = _correct_aerial_misclassification(
                         cls_name, x1o, y1o, x2o, y2o, target_cat
                     )
-                    # Re-get cls_id after potential remap
                     if cls_name == "person":
                         cls_id = next(
                             (k for k, v in model.names.items() if v == "person"), cls_id
@@ -1063,11 +1220,17 @@ def run_mapping_analysis(
                     if not _matches_characteristics(target_cat, characteristics, cls_name, crop):
                         continue
 
+                    # This object passed all filters — add to frame annotation list
+                    all_frame_objects.append({
+                        'x1': x1o, 'y1': y1o, 'x2': x2o, 'y2': y2o,
+                        'cls_name': cls_name, 'conf': confidence, 'track_id': track_id,
+                    })
+
                     # ── Unique object dedup ──
-                    # Build spatial key on a 50px grid (tighter than before)
+                    grid_size = 40 if cat_key in ("people", "plants") else 50
                     spatial_key = (
-                        round((x1o + x2o) / 2 / 50),  # centre-x bucket
-                        round((y1o + y2o) / 2 / 50),  # centre-y bucket
+                        round((x1o + x2o) / 2 / grid_size),
+                        round((y1o + y2o) / 2 / grid_size),
                         cls_id
                     )
 
@@ -1076,71 +1239,88 @@ def run_mapping_analysis(
                     else:
                         obj_key = spatial_key
 
-                    # If spatial position was already registered to a different obj_key, skip
                     if spatial_key in spatial_index:
                         existing = spatial_index[spatial_key]
                         if existing != obj_key and existing in confirmed_ids:
                             continue
 
-                    is_first_appearance = obj_key not in confirmed_ids
+                    is_new = obj_key not in confirmed_ids
 
-                    if is_first_appearance:
+                    # Proximity dedup
+                    if is_new:
+                        cx_new = (x1o + x2o) / 2
+                        cy_new = (y1o + y2o) / 2
+                        too_close = False
+                        for (cx_old, cy_old, old_cls) in confirmed_centers:
+                            if old_cls == cls_id:
+                                dist = ((cx_new - cx_old)**2 + (cy_new - cy_old)**2) ** 0.5
+                                if dist < DEDUP_RADIUS:
+                                    too_close = True
+                                    break
+                        if too_close:
+                            confirmed_ids.add(obj_key)
+                            continue
+
+                    if is_new:
                         confirmed_ids.add(obj_key)
                         spatial_index[spatial_key] = obj_key
                         first_seen_at[obj_key] = timestamp_sec
+                        confirmed_centers.append((
+                            (x1o + x2o) / 2, (y1o + y2o) / 2, cls_id
+                        ))
 
-                        # ── Fix 2: Save one screenshot per NEW unique object ──
-                        # Crop tightly around the detected object with padding,
-                        # draw bbox + label + timestamp, save as individual screenshot.
-                        try:
-                            pad = 30
-                            cx1 = max(0, int(x1o) - pad)
-                            cy1 = max(0, int(y1o) - pad)
-                            cx2 = min(w, int(x2o) + pad)
-                            cy2 = min(h, int(y2o) + pad)
-                            crop = frame[cy1:cy2, cx1:cx2].copy()
+                        # Save raw crop for CLIP visual dedup (unannotated)
+                        if crop is not None and crop.size > 0:
+                            crop_store[obj_key] = crop.copy()
 
-                            # Draw bbox on crop (offset by crop origin)
-                            bx1 = int(x1o) - cx1
-                            by1 = int(y1o) - cy1
-                            bx2 = int(x2o) - cx1
-                            by2 = int(y2o) - cy1
-                            cv2.rectangle(crop, (bx1, by1), (bx2, by2), (57, 255, 20), 2)
-                            tid_str = f" #{track_id}" if track_id else ""
-                            cv2.putText(crop,
-                                        f"{cls_name}{tid_str} {confidence:.0%}",
-                                        (bx1, max(by1 - 6, 10)),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (57, 255, 20), 2)
-                            # Timestamp at bottom
-                            cv2.putText(crop,
-                                        f"T={timestamp_sec:.1f}s",
-                                        (6, crop.shape[0] - 8),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 2)
-
-                            shot_path = _save_screenshot(
-                                crop, f"map_{analysis_id}", timestamp_sec
-                            )
-                            obj_screenshots[obj_key] = shot_path
-                        except Exception as se:
-                            logger.debug(f"[AI] Screenshot failed: {se}")
-
-                        label = (
-                            f"{cls_name}{(' #'+str(track_id)) if track_id else ''} "
-                            f"({confidence:.0%}) first seen T={timestamp_sec:.1f}s"
-                        )
-                        batch.append({
-                            "analysis_id": analysis_id,
-                            "category_id": cat_id,
-                            "label": label,
-                            "confidence": confidence,
-                            "bbox_x": x1o / w, "bbox_y": y1o / h,
-                            "bbox_w": (x2o - x1o) / w,
-                            "bbox_h": (y2o - y1o) / h,
-                            "frame_number": frame_idx,
-                            "timestamp": timestamp_sec,
-                            "characteristics": chars_str,
-                            "screenshot_path": obj_screenshots.get(obj_key),
+                        new_detections.append({
+                            'x1': x1o, 'y1': y1o, 'x2': x2o, 'y2': y2o,
+                            'cls_name': cls_name, 'conf': confidence,
+                            'track_id': track_id, 'obj_key': obj_key,
+                            'cat_id': cat_id, 'cls_id': cls_id,
                         })
+
+            # ── Phase 2: Full-frame screenshot with ALL detected objects ──
+            if all_frame_objects:
+                annotated = frame.copy()
+                for obj in all_frame_objects:
+                    ox1, oy1 = int(obj['x1']), int(obj['y1'])
+                    ox2, oy2 = int(obj['x2']), int(obj['y2'])
+                    cv2.rectangle(annotated, (ox1, oy1), (ox2, oy2), (57, 255, 20), 2)
+                    tid = obj['track_id']
+                    lbl = f"{obj['cls_name']}{'#'+str(tid) if tid else ''} {obj['conf']:.0%}"
+                    cv2.putText(annotated, lbl, (ox1, max(oy1 - 6, 10)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (57, 255, 20), 2)
+                # Frame info overlay
+                info = f"T={timestamp_sec:.1f}s | {len(all_frame_objects)} detected | {len(confirmed_ids)} unique total"
+                cv2.putText(annotated, info, (8, annotated.shape[0] - 12),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+
+                # Save screenshot if new detections found (limit to MAX_SCREENSHOTS)
+                if new_detections and len(obj_screenshots) < MAX_SCREENSHOTS * 3:
+                    shot_path = _save_screenshot(annotated, f"map_{analysis_id}", timestamp_sec)
+                    for det in new_detections:
+                        obj_screenshots[det['obj_key']] = shot_path
+
+            # ── Phase 3: Create batch items for new detections ──
+            for det in new_detections:
+                label = (
+                    f"{det['cls_name']}{(' #'+str(det['track_id'])) if det['track_id'] else ''} "
+                    f"({det['conf']:.0%}) first seen T={timestamp_sec:.1f}s"
+                )
+                batch.append({
+                    "analysis_id": analysis_id,
+                    "category_id": det['cat_id'],
+                    "label": label,
+                    "confidence": det['conf'],
+                    "bbox_x": det['x1'] / w, "bbox_y": det['y1'] / h,
+                    "bbox_w": (det['x2'] - det['x1']) / w,
+                    "bbox_h": (det['y2'] - det['y1']) / h,
+                    "frame_number": frame_idx,
+                    "timestamp": timestamp_sec,
+                    "characteristics": chars_str,
+                    "screenshot_path": obj_screenshots.get(det['obj_key']),
+                })
 
             if len(batch) >= BATCH_SIZE:
                 flush_batch()
@@ -1184,8 +1364,140 @@ def run_mapping_analysis(
             cap.release()
             flush_batch()
 
+        processing_time_before_dedup = time.time() - start_time
+
+        # ── Post-processing: CLIP visual dedup (removes same-looking people) ──
+        # Encode each person crop with CLIP, compare pairwise,
+        # merge any two with similarity > 0.85 (same clothing/appearance).
+        unique_count = len(confirmed_ids)  # fallback
+        try:
+            if len(crop_store) >= 2:
+                _write_progress(db, analysis_id, 96, len(confirmed_ids),
+                                "Running visual dedup (CLIP)...")
+
+                import torch
+                from transformers import CLIPProcessor, CLIPModel
+                from PIL import Image as PILImage
+
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                clip_model = CLIPModel.from_pretrained(
+                    "openai/clip-vit-base-patch32"
+                ).to(device)
+                clip_proc = CLIPProcessor.from_pretrained(
+                    "openai/clip-vit-base-patch32"
+                )
+                clip_model.eval()
+
+                # Encode all crops
+                embeddings = {}
+                obj_keys_list = []
+                for obj_key, crop_img in crop_store.items():
+                    if crop_img is None or crop_img.size == 0:
+                        continue
+                    try:
+                        pil = PILImage.fromarray(
+                            cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)
+                        )
+                        with torch.no_grad():
+                            inp = clip_proc(images=pil, return_tensors="pt")
+                            feat = clip_model.get_image_features(
+                                pixel_values=inp["pixel_values"].to(device)
+                            )
+                            # Handle structured output from some transformers versions
+                            if not isinstance(feat, torch.Tensor):
+                                feat = feat.pooler_output if hasattr(feat, 'pooler_output') else feat[0]
+                            feat = feat / feat.norm(dim=-1, keepdim=True)
+                            embeddings[obj_key] = feat
+                            obj_keys_list.append(obj_key)
+                    except Exception:
+                        continue
+
+                # Pairwise comparison: merge visually similar detections
+                # RULE: NEVER merge two detections first seen at the same time
+                # (same frame = guaranteed different people)
+                VISUAL_SIM_THRESHOLD = 0.82
+                SAME_FRAME_WINDOW = 1.5  # seconds — if first_seen within this, don't merge
+                merged_away = set()
+                for i in range(len(obj_keys_list)):
+                    if obj_keys_list[i] in merged_away:
+                        continue
+                    for j in range(i + 1, len(obj_keys_list)):
+                        if obj_keys_list[j] in merged_away:
+                            continue
+                        # Same-frame protection: don't merge co-occurring detections
+                        ts_i = first_seen_at.get(obj_keys_list[i], -999)
+                        ts_j = first_seen_at.get(obj_keys_list[j], -999)
+                        if abs(ts_i - ts_j) < SAME_FRAME_WINDOW:
+                            continue  # seen at ~same time → different objects
+                        sim = float((
+                            embeddings[obj_keys_list[i]] @
+                            embeddings[obj_keys_list[j]].T
+                        ).squeeze())
+                        if sim > VISUAL_SIM_THRESHOLD:
+                            merged_away.add(obj_keys_list[j])
+
+                unique_count = len(obj_keys_list) - len(merged_away)
+                if merged_away:
+                    logger.info(
+                        f"[AI] CLIP visual dedup: {len(obj_keys_list)} crops "
+                        f"-> {unique_count} unique (merged {len(merged_away)} duplicates, "
+                        f"threshold={VISUAL_SIM_THRESHOLD})"
+                    )
+
+                # Clean up CLIP from GPU memory
+                del clip_model, clip_proc, embeddings
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+        except Exception as e:
+            logger.warning(f"[AI] CLIP visual dedup failed ({e}), using spatial count")
+            # Fall back to spatial dedup
+            merged_centers = []
+            for (cx, cy, cid) in confirmed_centers:
+                is_dup = False
+                for (mx, my, mid) in merged_centers:
+                    if mid == cid and ((cx-mx)**2+(cy-my)**2)**0.5 < DEDUP_RADIUS:
+                        is_dup = True
+                        break
+                if not is_dup:
+                    merged_centers.append((cx, cy, cid))
+            unique_count = len(merged_centers) if merged_centers else len(confirmed_ids)
+
         processing_time = time.time() - start_time
-        unique_count = len(confirmed_ids)
+
+        # ── Delete excess detection records from DB ──
+        # During processing, all detections were flushed to the DB.
+        # After CLIP dedup, unique_count may be much lower than the DB row count.
+        # Keep only the top `unique_count` detections by confidence, delete the rest.
+        try:
+            current_det_count = db.execute(
+                text("SELECT COUNT(*) FROM detections WHERE analysis_id = :id"),
+                {"id": analysis_id}
+            ).scalar() or 0
+
+            if unique_count < current_det_count:
+                logger.info(
+                    f"[AI] Pruning detections: {current_det_count} in DB "
+                    f"-> keeping top {unique_count} by confidence"
+                )
+                # Delete all but the top N detections (by confidence DESC)
+                db.execute(
+                    text("""
+                        DELETE FROM detections
+                        WHERE analysis_id = :id
+                          AND id NOT IN (
+                            SELECT id FROM detections
+                            WHERE analysis_id = :id
+                            ORDER BY confidence DESC
+                            LIMIT :keep
+                          )
+                    """),
+                    {"id": analysis_id, "keep": unique_count}
+                )
+                db.commit()
+                logger.info(f"[AI] Pruned: kept {unique_count} detection records")
+        except Exception as prune_err:
+            logger.warning(f"[AI] Detection pruning failed: {prune_err}")
 
         db.execute(
             text("SELECT complete_analysis(:id, :total, :time)"),
