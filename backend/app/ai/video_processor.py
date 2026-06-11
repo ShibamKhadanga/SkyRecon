@@ -222,7 +222,7 @@ YOLO_TO_CATEGORY: dict[str, str] = {
 # ── Heuristic-only categories (not detectable via YOLO COCO classes) ──────────
 # These use OpenCV image analysis instead of / in addition to YOLO.
 HEURISTIC_CATEGORIES = {
-    "trees", "road potholes", "water bodies", "flood water",
+    "trees", "plants", "road potholes", "water bodies", "flood water",
     "fire & smoke", "solar panels", "agricultural land",
     "construction zones", "parking areas", "roads",
     "electric poles", "street lights", "buildings", "houses",
@@ -402,6 +402,55 @@ def _detect_heuristic(
             if not _matches_characteristics(target_cat, json.loads(chars_str or '{}'), None, crop):
                 continue
             detections.append((x, y, x + bw, y + bh, "tree", conf))
+
+    # ── Plants: SegFormer + ExG green index (smaller vegetation) ─────────────
+    elif cat_lower == "plants":
+        seg_mask = _run_segformer(frame, target_cat)
+        if seg_mask is not None:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (12, 12))
+            seg_mask = cv2.morphologyEx(seg_mask, cv2.MORPH_CLOSE, kernel)
+            seg_mask = cv2.morphologyEx(seg_mask, cv2.MORPH_OPEN,
+                                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (6, 6)))
+            contours, _ = cv2.findContours(seg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        else:
+            # Fallback: ExG vegetation index + broader HSV green for smaller plants
+            b_ch = frame[:, :, 0].astype(np.float32)
+            g_ch = frame[:, :, 1].astype(np.float32)
+            r_ch = frame[:, :, 2].astype(np.float32)
+            exg = 2.0 * g_ch - r_ch - b_ch
+            exg_norm = cv2.normalize(exg, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            _, exg_mask = cv2.threshold(exg_norm, 25, 255, cv2.THRESH_BINARY)
+            # Broader HSV green range to catch lighter / potted plants
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            hsv_mask = cv2.inRange(hsv, np.array([20, 20, 15]), np.array([100, 255, 255]))
+            combined = cv2.bitwise_or(exg_mask, hsv_mask)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (10, 10))
+            combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel)
+            combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN,
+                                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+            contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Lower min area than trees — plants/shrubs can be much smaller
+        min_area = (w * h) * 0.0003
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < min_area:
+                continue
+            x, y, bw, bh = cv2.boundingRect(cnt)
+            aspect = bw / max(bh, 1)
+            if aspect > 6.0 or aspect < 0.15:
+                continue
+            crop = frame[y:y+bh, x:x+bw]
+            if crop.size == 0:
+                continue
+            # Reject sky-dominated regions
+            sky_ratio = _region_hsv_ratio(crop, [90, 15, 100], [140, 255, 255])
+            if sky_ratio > 0.40:
+                continue
+            conf = min(0.91, 0.55 + (area / (w * h)) * 3.0)
+            if not _matches_characteristics(target_cat, json.loads(chars_str or '{}'), None, crop):
+                continue
+            detections.append((x, y, x + bw, y + bh, "plant", conf))
 
     # ── Road Potholes: dark circular blobs on road surface ───────────────────
     elif cat_lower == "road potholes":
@@ -699,6 +748,9 @@ def _detect_heuristic(
 
     # ── Now process all heuristic detections into batch ───────────────────────
     for (x1, y1, x2, y2, label, conf) in detections:
+        # 75% confidence gate — only record high-confidence detections
+        if conf < settings.MIN_DISPLAY_CONFIDENCE:
+            continue
         # Centre-point spatial key on 25px grid
         spatial_key = (
             round((x1 + x2) / 2 / 25),
@@ -1187,6 +1239,10 @@ def run_mapping_analysis(
                     cls_name   = model.names[cls_id]
                     confidence = float(box.conf[0])
                     track_id   = int(box.id[0]) if box.id is not None else None
+
+                    # 75% confidence gate — only record high-confidence detections
+                    if confidence < settings.MIN_DISPLAY_CONFIDENCE:
+                        continue
 
                     # Scale bbox to original resolution
                     x1, y1, x2, y2 = box.xyxy[0].tolist()

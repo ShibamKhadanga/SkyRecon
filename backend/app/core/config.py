@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # AI Settings
     YOLO_MODEL: str = "yolov8s.pt"
     CONFIDENCE_THRESHOLD: float = 0.5
+    MIN_DISPLAY_CONFIDENCE: float = 0.75  # Only display/record detections ≥ this
 
     # CORS — accepts plain string, comma-separated, or JSON array from env
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
