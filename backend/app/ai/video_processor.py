@@ -831,7 +831,7 @@ def _correct_aerial_misclassification(
 CATEGORY_SETTINGS: dict[str, dict] = {
     # Aerial people: conf=0.25 catches edge/partial people, CLIP dedup handles duplicates.
     # fps=4 catches fast walkers, iou=0.40 tighter NMS
-    "people":             {"fps": 4, "conf": 0.25, "iou": 0.40},
+    "people":             {"fps": 2, "conf": 0.25, "iou": 0.40},
     # Vehicles are large from above — higher conf reduces road-marking false positives
     "vehicles":           {"fps": 1, "conf": 0.42, "iou": 0.50},
     "animals":            {"fps": 2, "conf": 0.20, "iou": 0.40},
@@ -1196,11 +1196,12 @@ def run_mapping_analysis(
                     )
                 return  # heuristic-only, skip YOLO for this category
 
-            # ── SAHI tiled inference ── (DISABLED: causes overcounting due to
-            # duplicate detections from overlapping tiles. The 960px resolution
-            # is sufficient for small objects. Keep code for future use.)
+            # ── SAHI tiled inference ── DISABLED for CPU performance.
+            # Each SAHI pass adds 4 extra YOLO inferences per frame (~5x slower).
+            # The real accuracy fix was lowering MIN_DISPLAY_CONFIDENCE (0.75→0.35).
+            # Enable on GPU servers for maximum recall.
             sahi_detections = None
-            # if cat_key in SAHI_CATEGORIES and w >= 1920:
+            # if cat_key in SAHI_CATEGORIES and w >= 1280:
             #     sahi_detections = _run_sahi_tiled(
             #         model, enhanced, conf_threshold, iou_threshold
             #     )
@@ -1334,6 +1335,112 @@ def run_mapping_analysis(
                             'cls_name': cls_name, 'conf': confidence,
                             'track_id': track_id, 'obj_key': obj_key,
                             'cat_id': cat_id, 'cls_id': cls_id,
+                        })
+
+            # ── Merge SAHI detections not already covered by ByteTrack ──
+            if sahi_detections:
+                for sd in sahi_detections:
+                    sx1, sy1, sx2, sy2 = sd['x1'], sd['y1'], sd['x2'], sd['y2']
+                    s_cls_name = sd['cls_name']
+                    s_conf = sd['conf']
+
+                    if s_conf < settings.MIN_DISPLAY_CONFIDENCE:
+                        continue
+
+                    s_cls_name = _correct_aerial_misclassification(
+                        s_cls_name, sx1, sy1, sx2, sy2, target_cat
+                    )
+                    s_cls_id = sd['cls_id']
+                    if s_cls_name == "person":
+                        s_cls_id = next(
+                            (k for k, v in model.names.items() if v == "person"), s_cls_id
+                        )
+
+                    mapped_cat = YOLO_TO_CATEGORY.get(s_cls_name)
+                    if not mapped_cat:
+                        continue
+                    if detection_mode != "custom" and mapped_cat.lower() != target_cat.lower():
+                        continue
+
+                    cat_id = cat_cache.get(mapped_cat)
+                    if cat_id is None:
+                        continue
+
+                    # Check if this SAHI detection overlaps with any existing detection
+                    already_covered = False
+                    for existing in all_frame_objects:
+                        # Compute IoU
+                        ix1 = max(sx1, existing['x1'])
+                        iy1 = max(sy1, existing['y1'])
+                        ix2 = min(sx2, existing['x2'])
+                        iy2 = min(sy2, existing['y2'])
+                        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+                        area_s = (sx2 - sx1) * (sy2 - sy1)
+                        area_e = (existing['x2'] - existing['x1']) * (existing['y2'] - existing['y1'])
+                        union = area_s + area_e - inter
+                        if union > 0 and inter / union > 0.3:
+                            already_covered = True
+                            break
+                    if already_covered:
+                        continue
+
+                    # This SAHI detection is NEW — process it
+                    crop = None
+                    if 0 <= int(sx1) < w and 0 <= int(sy1) < h:
+                        crop = frame[
+                            max(0, int(sy1)):min(h, int(sy2)),
+                            max(0, int(sx1)):min(w, int(sx2)),
+                        ]
+                    if not _matches_characteristics(target_cat, characteristics, s_cls_name, crop):
+                        continue
+
+                    all_frame_objects.append({
+                        'x1': sx1, 'y1': sy1, 'x2': sx2, 'y2': sy2,
+                        'cls_name': s_cls_name, 'conf': s_conf, 'track_id': None,
+                    })
+
+                    # Unique object dedup (same as ByteTrack path)
+                    grid_size = 40 if cat_key in ("people", "plants") else 50
+                    spatial_key = (
+                        round((sx1 + sx2) / 2 / grid_size),
+                        round((sy1 + sy2) / 2 / grid_size),
+                        s_cls_id
+                    )
+                    obj_key = spatial_key  # SAHI has no track_id
+
+                    if spatial_key in spatial_index:
+                        existing_key = spatial_index[spatial_key]
+                        if existing_key != obj_key and existing_key in confirmed_ids:
+                            continue
+
+                    is_new = obj_key not in confirmed_ids
+                    if is_new:
+                        cx_new = (sx1 + sx2) / 2
+                        cy_new = (sy1 + sy2) / 2
+                        too_close = False
+                        for (cx_old, cy_old, old_cls) in confirmed_centers:
+                            if old_cls == s_cls_id:
+                                dist = ((cx_new - cx_old)**2 + (cy_new - cy_old)**2) ** 0.5
+                                if dist < DEDUP_RADIUS:
+                                    too_close = True
+                                    break
+                        if too_close:
+                            confirmed_ids.add(obj_key)
+                            continue
+
+                        confirmed_ids.add(obj_key)
+                        spatial_index[spatial_key] = obj_key
+                        first_seen_at[obj_key] = timestamp_sec
+                        confirmed_centers.append((cx_new, cy_new, s_cls_id))
+
+                        if crop is not None and crop.size > 0:
+                            crop_store[obj_key] = crop.copy()
+
+                        new_detections.append({
+                            'x1': sx1, 'y1': sy1, 'x2': sx2, 'y2': sy2,
+                            'cls_name': s_cls_name, 'conf': s_conf,
+                            'track_id': None, 'obj_key': obj_key,
+                            'cat_id': cat_id, 'cls_id': s_cls_id,
                         })
 
             # ── Phase 2: Full-frame screenshot with ALL detected objects ──

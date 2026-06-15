@@ -80,12 +80,16 @@ The pipeline automatically selects the best model per category. On deployment, a
 ### YOLO-Detectable Categories (People, Vehicles, Animals...)
 
 ```
-Frame → CLAHE Enhancement → Resize 640px → YOLOv8 + ByteTrack
+Frame → CLAHE Enhancement → Resize 960px (people/animals/plants) or 640px
+     → YOLOv8 + ByteTrack multi-object tracking
      → Aerial misclassification fix (kite→person etc.)
+     → Adaptive confidence gate (MIN_DISPLAY_CONFIDENCE = 0.35)
      → Characteristics filter (2-Wheeler, color, etc.)
      → Unique object tracking (one count per track ID)
+     → Proximity dedup (60px radius) + spatial grid dedup
      → Full-frame annotated screenshot per detection
-     → CLIP visual deduplication (post-processing)
+     → CLIP visual deduplication (post-processing, sim > 0.82)
+     → Same-frame protection (never merge detections < 1.5s apart)
      → DB pruning (delete duplicate detection records)
 ```
 
@@ -456,10 +460,11 @@ SkyRecon is **PWA-ready** (Progressive Web App). Users on Android and iOS can in
 | `DB_USER` | `postgres` | Database user |
 | `DB_PASSWORD` | `postgres` | Database password |
 | `YOLO_MODEL` | `yolov8s.pt` | Base fallback model (`yolov8n.pt` on free tier) |
-| `CONFIDENCE_THRESHOLD` | `0.35` | Detection confidence threshold |
+| `CONFIDENCE_THRESHOLD` | `0.5` | YOLO detection confidence threshold (fallback; per-category overrides in `video_processor.py`) |
+| `MIN_DISPLAY_CONFIDENCE` | `0.35` | Post-detection gate — detections below this are discarded. Lowered from 0.75 to catch more valid people. CLIP dedup handles false positives. |
 | `ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated CORS origins |
 | `UPLOAD_DIR` | `uploads` | Directory for uploaded files |
-| `SCREENSHOT_DIR` | `screenshots` | Directory for per-object screenshots |
+| `SCREENSHOTS_DIR` | `screenshots` | Directory for per-object screenshots |
 | `REPORTS_DIR` | `reports` | Directory for generated reports |
 | `MAX_UPLOAD_SIZE_MB` | `500` | Maximum upload file size |
 
@@ -574,6 +579,12 @@ Access at `/find`. Two search modes for finding people or objects in drone foota
 
 ## Mapping & Survey — Accuracy Features
 
+### Adaptive Confidence Gate
+YOLO runs at a low per-category confidence (e.g. 0.25 for people) to maximize recall, but a **post-detection gate** (`MIN_DISPLAY_CONFIDENCE = 0.35`) filters out noise before recording. This was lowered from 0.75 → 0.35, which was the **single biggest accuracy fix** — many valid people had 40-70% YOLO confidence and were being silently discarded. CLIP visual dedup handles any false positives that slip through.
+
+### Higher Resolution for Small Objects
+People, animals, and plants are processed at **960px** inference resolution (vs 640px default). This preserves more detail from aerial footage and helps YOLO detect smaller/farther people. SAHI tiled inference (4-quadrant overlap) is available but **disabled on CPU** for performance — enable on GPU servers for maximum recall.
+
 ### CLIP Visual Deduplication
 After YOLO + ByteTrack processing is complete, a **post-processing dedup step** runs:
 
@@ -585,6 +596,20 @@ After YOLO + ByteTrack processing is complete, a **post-processing dedup step** 
 
 ### Same-Frame Protection
 Detections first seen within 1.5 seconds of each other are **never merged**, even if visually similar. This prevents different people standing side-by-side from being collapsed into one count.
+
+### Proximity Deduplication
+Before CLIP post-processing, a **spatial proximity dedup** (60px radius) prevents the same physical person from being counted twice when ByteTrack assigns a new track ID due to occlusion or camera shake.
+
+### Per-Category Tuned Inference
+Each category has independently tuned parameters:
+
+| Category | FPS Sample | YOLO Conf | IOU | Notes |
+|---|---|---|---|---|
+| People | 2 | 0.25 | 0.40 | Low conf for partial/edge people; CLIP dedup handles FPs |
+| Vehicles | 1 | 0.42 | 0.50 | Higher conf reduces road-marking false positives |
+| Animals | 2 | 0.20 | 0.40 | Very low conf for small/camouflaged animals |
+| Fire & Smoke | 3 | 0.25 | 0.38 | Low conf to catch early-stage events |
+| Default | 1 | 0.35 | 0.50 | All other categories |
 
 ### Full-Frame Screenshots
 Each detection screenshot shows the **entire video frame** with all detected objects highlighted by green bounding boxes, rather than individual cropped thumbnails. This provides visual context for verification.
