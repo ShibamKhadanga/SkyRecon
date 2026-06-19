@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Video, Trash2, Download, Play, Clock, HardDrive, VideoOff, Trash } from 'lucide-react'
+import { Video, Trash2, Download, Play, Clock, HardDrive, VideoOff, Trash, ArrowUpDown } from 'lucide-react'
 import { getRecordings, deleteRecording, clearRecordings } from '../hooks/useRecordingsStore'
 
 function formatSize(bytes) {
@@ -17,6 +17,8 @@ function formatDuration(ms) {
 export default function RecordingsPage() {
   const [recordings, setRecordings] = useState(getRecordings())
   const [playing, setPlaying] = useState(null)
+  const [sortBy, setSortBy] = useState('newest')
+  const [showSortMenu, setShowSortMenu] = useState(false)
 
   // Sync when LiveFeedPage saves a new recording
   useEffect(() => {
@@ -39,19 +41,37 @@ export default function RecordingsPage() {
   }
 
   const handleClearAll = () => {
-    // Revoke all blob URLs to free memory
     getRecordings().forEach(r => { try { URL.revokeObjectURL(r.url) } catch {} })
     clearRecordings()
     setRecordings([])
     setPlaying(null)
   }
 
+  const sortOptions = [
+    { value: 'newest',  label: 'Newest First' },
+    { value: 'oldest',  label: 'Oldest First' },
+    { value: 'name',    label: 'Name A → Z' },
+    { value: 'largest', label: 'Largest First' },
+    { value: 'longest', label: 'Longest First' },
+  ]
+
+  const sorted = [...recordings].sort((a, b) => {
+    switch (sortBy) {
+      case 'newest':  return new Date(b.date || 0) - new Date(a.date || 0)
+      case 'oldest':  return new Date(a.date || 0) - new Date(b.date || 0)
+      case 'name':    return (a.name || '').localeCompare(b.name || '')
+      case 'largest': return (b.size || 0) - (a.size || 0)
+      case 'longest': return (b.duration || 0) - (a.duration || 0)
+      default:        return 0
+    }
+  })
+
   const totalSize = recordings.reduce((sum, r) => sum + (r.size || 0), 0)
 
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold mb-1 flex items-center gap-2">
             <Video size={22} className="text-red-400" /> Recordings
@@ -65,6 +85,49 @@ export default function RecordingsPage() {
             <span className="text-xs font-mono text-[var(--text-muted)] flex items-center gap-1.5">
               <HardDrive size={12} /> {recordings.length} recording{recordings.length !== 1 ? 's' : ''} · {formatSize(totalSize)}
             </span>
+
+            {/* Sort Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setShowSortMenu(prev => !prev)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-all cursor-pointer ${
+                  sortBy !== 'newest'
+                    ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
+                    : 'bg-white/[0.03] text-[var(--text-secondary)] border-white/10 hover:border-white/20 hover:text-white'
+                }`}
+              >
+                <ArrowUpDown size={13} />
+                {sortOptions.find(o => o.value === sortBy)?.label || 'Sort'}
+              </button>
+              <AnimatePresence>
+                {showSortMenu && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowSortMenu(false)} />
+                    <motion.div
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 6 }}
+                      className="absolute right-0 mt-2 w-44 bg-[#0b0f19] border border-cyan-500/20 rounded-xl shadow-2xl z-50 overflow-hidden"
+                    >
+                      {sortOptions.map(opt => (
+                        <button
+                          key={opt.value}
+                          onClick={() => { setSortBy(opt.value); setShowSortMenu(false) }}
+                          className={`w-full text-left px-4 py-2.5 text-xs transition-colors cursor-pointer ${
+                            sortBy === opt.value
+                              ? 'bg-cyan-500/10 text-cyan-400 font-semibold'
+                              : 'text-[var(--text-secondary)] hover:bg-white/[0.04] hover:text-white'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+
             <button onClick={handleClearAll}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-semibold hover:bg-red-500/20 transition-colors">
               <Trash size={12} /> Clear All
@@ -91,7 +154,7 @@ export default function RecordingsPage() {
       {/* Recordings grid */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <AnimatePresence>
-          {recordings.map((rec, i) => (
+          {sorted.map((rec, i) => (
             <motion.div
               key={rec.id}
               initial={{ opacity: 0, y: 12 }}

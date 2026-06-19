@@ -47,7 +47,7 @@ SkyRecon is a full-stack AI drone intelligence platform that **actually processe
 
 | Module | Description |
 |---|---|
-| **Mapping & Survey** | Detect 25 categories from aerial footage using specialized fine-tuned models. Get real unique object counts via ByteTrack + CLIP visual deduplication, area coverage in m², full-frame annotated screenshots with bounding boxes, and downloadable PDF/DOCX reports. |
+| **Mapping & Survey** | Detect 25 categories from aerial footage using specialized fine-tuned models. Get real unique object counts via ByteTrack + CLIP visual deduplication + per-frame floor enforcement, area coverage in m², full-frame annotated screenshots with bounding boxes, and downloadable PDF/DOCX reports with sort (name/date/objects). |
 | **Disaster Response** | Scan footage for floods, fire, structural damage, fallen poles. Each event gets severity 1–5, a screenshot from the exact video frame, resource estimates, and an actionable report. |
 | **Live Drone Feed** | Real-time video streaming with telemetry HUD overlay, in-browser recording, and multi-protocol support (FPV USB receiver, MJPEG, HLS, Direct MP4). |
 | **Object Finder** | Two search modes: **Facial Attributes** (filter by gender, age, hair, glasses, skin tone, clothing) and **Visual Match** (face-level CLIP matching with OpenCV Haar face detection). Scans uploaded video or live stream and returns every appearance with timestamp, confidence, full-frame thumbnail, and PDF export. |
@@ -80,16 +80,14 @@ The pipeline automatically selects the best model per category. On deployment, a
 ### YOLO-Detectable Categories (People, Vehicles, Animals...)
 
 ```
-Frame → CLAHE Enhancement → Resize 960px (people/animals/plants) or 640px
-     → YOLOv8 + ByteTrack multi-object tracking
+Frame → CLAHE Enhancement → Resize 960px → YOLOv8 + ByteTrack
      → Aerial misclassification fix (kite→person etc.)
-     → Adaptive confidence gate (MIN_DISPLAY_CONFIDENCE = 0.35)
      → Characteristics filter (2-Wheeler, color, etc.)
+     → Per-frame object counting (tracks max per-frame as floor)
      → Unique object tracking (one count per track ID)
-     → Proximity dedup (60px radius) + spatial grid dedup
      → Full-frame annotated screenshot per detection
-     → CLIP visual deduplication (post-processing, sim > 0.82)
-     → Same-frame protection (never merge detections < 1.5s apart)
+     → CLIP visual deduplication (post-processing, threshold 0.88)
+     → Per-frame floor enforcement (prevents CLIP from under-counting)
      → DB pruning (delete duplicate detection records)
 ```
 
@@ -193,7 +191,8 @@ Video Frame → YOLO person detection → Person crop
 | **ByteTrack** | Mapping | Multi-object tracking — assigns persistent IDs across video frames |
 | **CLIP Visual Matching** | Object Finder, Mapping Dedup | Cosine similarity between image embeddings for person re-identification |
 | **CLIP Face-to-Face** | Object Finder | OpenCV Haar cascade detects faces → CLIP compares face crops (not full-body) for higher accuracy |
-| **CLIP Visual Dedup** | Mapping | Post-processing: pairwise CLIP comparison of all person crops, merging duplicates (sim > 0.82) with same-frame protection |
+| **CLIP Visual Dedup** | Mapping | Post-processing: pairwise CLIP comparison of all person crops, merging duplicates (sim > 0.88) with same-frame protection |
+| **Per-Frame Floor** | Mapping | Tracks the maximum number of objects detected in any single frame — guarantees final count ≥ this floor, preventing CLIP from over-merging |
 | **SegFormer-B2** | Trees, Water, Buildings | Semantic segmentation — pixel-level classification of aerial imagery |
 | **CLAHE Enhancement** | All Detection | Contrast-limited adaptive histogram equalization — improves detection in shadowed/overexposed frames |
 | **ExG Vegetation Index** | Trees, Plants | `ExG = 2*G - R - B` — isolates green vegetation from aerial RGB |
@@ -281,10 +280,10 @@ SkyRecon/
 │       ├── MappingPage.jsx           # Upload + config + results (mapping)
 │       ├── DisasterPage.jsx          # Upload + config + results (disaster)
 │       ├── MapPage.jsx               # GIS map with markers + heatmaps
-│       ├── ReportsPage.jsx           # Report listing + download
+│       ├── ReportsPage.jsx           # Report listing + download + sort (name/date/objects)
 │       ├── AdminPage.jsx             # Category & system management
 │       ├── LiveFeedPage.jsx          # Real-time drone stream + telemetry + recording
-│       ├── RecordingsPage.jsx        # Playback, download & manage saved recordings
+│       ├── RecordingsPage.jsx        # Playback, download & manage + sort (name/date/size/duration)
 │       └── FindPage.jsx              # AI object finder (face matching + CLIP visual match + PDF export)
 │
 ├── public/
@@ -460,13 +459,12 @@ SkyRecon is **PWA-ready** (Progressive Web App). Users on Android and iOS can in
 | `DB_USER` | `postgres` | Database user |
 | `DB_PASSWORD` | `postgres` | Database password |
 | `YOLO_MODEL` | `yolov8s.pt` | Base fallback model (`yolov8n.pt` on free tier) |
-| `CONFIDENCE_THRESHOLD` | `0.5` | YOLO detection confidence threshold (fallback; per-category overrides in `video_processor.py`) |
-| `MIN_DISPLAY_CONFIDENCE` | `0.35` | Post-detection gate — detections below this are discarded. Lowered from 0.75 to catch more valid people. CLIP dedup handles false positives. |
-| `ALLOWED_ORIGINS` | `http://localhost:3000` | Comma-separated CORS origins |
-| `UPLOAD_DIR` | `uploads` | Directory for uploaded files |
-| `SCREENSHOTS_DIR` | `screenshots` | Directory for per-object screenshots |
-| `REPORTS_DIR` | `reports` | Directory for generated reports |
-| `MAX_UPLOAD_SIZE_MB` | `500` | Maximum upload file size |
+| `CONFIDENCE_THRESHOLD` | `0.5` | Detection confidence threshold (base YOLO) |
+| `MIN_DISPLAY_CONFIDENCE` | `0.75` | Secondary confidence gate for heuristic detections (removed from YOLO loop; only used in heuristic path) |
+| `ALLOWED_ORIGINS` | `http://localhost:3000, http://localhost:5173` | Comma-separated CORS origins |
+| `UPLOAD_DIR` | `./uploads` | Directory for uploaded files |
+| `SCREENSHOTS_DIR` | `./screenshots` | Directory for per-object screenshots |
+| `REPORTS_DIR` | `./reports` | Directory for generated reports |
 
 Copy `.env.example` to `.env` and fill in your values for local development.
 
@@ -579,37 +577,21 @@ Access at `/find`. Two search modes for finding people or objects in drone foota
 
 ## Mapping & Survey — Accuracy Features
 
-### Adaptive Confidence Gate
-YOLO runs at a low per-category confidence (e.g. 0.25 for people) to maximize recall, but a **post-detection gate** (`MIN_DISPLAY_CONFIDENCE = 0.35`) filters out noise before recording. This was lowered from 0.75 → 0.35, which was the **single biggest accuracy fix** — many valid people had 40-70% YOLO confidence and were being silently discarded. CLIP visual dedup handles any false positives that slip through.
-
-### Higher Resolution for Small Objects
-People, animals, and plants are processed at **960px** inference resolution (vs 640px default). This preserves more detail from aerial footage and helps YOLO detect smaller/farther people. SAHI tiled inference (4-quadrant overlap) is available but **disabled on CPU** for performance — enable on GPU servers for maximum recall.
+### Per-Frame Floor Count
+During processing, the system tracks the **maximum number of target objects detected in any single frame**. This is a hard lower bound — if YOLO sees 7 people in one frame, the final count cannot be less than 7. After CLIP dedup, if the unique count falls below this floor, the count is bumped back up. This prevents CLIP from over-merging distinct objects that look similar from aerial view.
 
 ### CLIP Visual Deduplication
 After YOLO + ByteTrack processing is complete, a **post-processing dedup step** runs:
 
 1. All unique person/object crops are encoded with CLIP (`openai/clip-vit-base-patch32`)
 2. Pairwise cosine similarity is computed between all crop embeddings
-3. If two crops have similarity > 0.82 AND were **NOT first seen in the same frame** (same-frame protection), the duplicate is merged away
+3. If two crops have similarity > 0.88 AND were **NOT first seen in the same frame** (same-frame protection), the duplicate is merged away
 4. After dedup, excess detection records are **deleted from the PostgreSQL database** — only the top N detections by confidence are kept
-5. The final unique count is written to `total_objects` in the analysis record
+5. The per-frame floor is applied — final count = max(CLIP unique count, max per-frame count)
+6. The final unique count is written to `total_objects` in the analysis record
 
 ### Same-Frame Protection
 Detections first seen within 1.5 seconds of each other are **never merged**, even if visually similar. This prevents different people standing side-by-side from being collapsed into one count.
-
-### Proximity Deduplication
-Before CLIP post-processing, a **spatial proximity dedup** (60px radius) prevents the same physical person from being counted twice when ByteTrack assigns a new track ID due to occlusion or camera shake.
-
-### Per-Category Tuned Inference
-Each category has independently tuned parameters:
-
-| Category | FPS Sample | YOLO Conf | IOU | Notes |
-|---|---|---|---|---|
-| People | 2 | 0.25 | 0.40 | Low conf for partial/edge people; CLIP dedup handles FPs |
-| Vehicles | 1 | 0.42 | 0.50 | Higher conf reduces road-marking false positives |
-| Animals | 2 | 0.20 | 0.40 | Very low conf for small/camouflaged animals |
-| Fire & Smoke | 3 | 0.25 | 0.38 | Low conf to catch early-stage events |
-| Default | 1 | 0.35 | 0.50 | All other categories |
 
 ### Full-Frame Screenshots
 Each detection screenshot shows the **entire video frame** with all detected objects highlighted by green bounding boxes, rather than individual cropped thumbnails. This provides visual context for verification.
@@ -623,6 +605,7 @@ Access at `/recordings`. All recordings captured from the Live Feed page are sto
 - In-browser playback with native video controls
 - Download as WebM or MP4
 - Per-recording metadata: source protocol, duration, file size, capture date
+- Sort by: name, date (newest/oldest), size, or duration
 - Clear all with one click (blob URLs revoked to free memory)
 
 ---

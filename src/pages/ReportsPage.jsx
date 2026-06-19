@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   FileText, Download, Eye, Calendar, BarChart3,
-  Filter, Search, FileIcon, Trash2, X, RefreshCw
+  Filter, Search, FileIcon, Trash2, X, RefreshCw, ArrowUpDown
 } from 'lucide-react'
 import GlassCard from '../components/ui/GlassCard'
 import NeonButton from '../components/ui/NeonButton'
@@ -16,17 +16,17 @@ export default function ReportsPage() {
   const [selectedReport, setSelectedReport] = useState(null)
   const [activeFilter, setActiveFilter] = useState('all')
   const [showFilterMenu, setShowFilterMenu] = useState(false)
+  const [showSortMenu, setShowSortMenu] = useState(false)
+  const [sortBy, setSortBy] = useState('newest')
   const [downloading, setDownloading] = useState(null)
 
   const fetchReports = async () => {
     setLoading(true)
     try {
-      // Fetch reports list from backend (includes all completed analyses)
       try {
         const data = await fetchJson('/api/v1/analysis/reports/')
         setReports(data)
       } catch (e) {
-        // Fallback: fetch completed analyses directly
         try {
           const analyses = await fetchJson('/api/v1/analysis/?limit=50')
           const built = analyses
@@ -62,14 +62,11 @@ export default function ReportsPage() {
     if (!aid) return
     setDownloading(`${aid}-${fmt}`)
     try {
-      // Request report generation
       const data = await fetchJson(
         `/api/v1/analysis/${aid}/report?report_type=${report.report_type || 'mapping'}&fmt=${fmt}`,
         { method: 'POST' }
       )
       const rid = data.report_id
-
-      // Poll until ready
       let attempts = 0
       const poll = setInterval(async () => {
         attempts++
@@ -85,9 +82,7 @@ export default function ReportsPage() {
             setDownloading(null)
             alert('Report generation failed.')
           }
-        } catch (_) {
-          // Keep polling until service recovers or timeout expires
-        }
+        } catch (_) {}
       }, 2000)
     } catch (e) {
       setDownloading(null)
@@ -107,15 +102,34 @@ export default function ReportsPage() {
     }
   }
 
-  const filtered = reports.filter(r => {
-    const title = r.title || r.project_name || ''
-    const matchSearch = title.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchFilter =
-      activeFilter === 'all' ||
-      r.report_type === activeFilter ||
-      r.status === activeFilter
-    return matchSearch && matchFilter
-  })
+  const sortOptions = [
+    { value: 'newest',  label: 'Newest First' },
+    { value: 'oldest',  label: 'Oldest First' },
+    { value: 'name',    label: 'Name A → Z' },
+    { value: 'objects', label: 'Most Objects' },
+  ]
+
+  const filtered = reports
+    .filter(r => {
+      const title = r.title || r.project_name || ''
+      const matchSearch = title.toLowerCase().includes(searchQuery.toLowerCase())
+      const matchFilter =
+        activeFilter === 'all' ||
+        r.report_type === activeFilter ||
+        r.status === activeFilter
+      return matchSearch && matchFilter
+    })
+    .sort((a, b) => {
+      const nameA = (a.title || a.project_name || '').toLowerCase()
+      const nameB = (b.title || b.project_name || '').toLowerCase()
+      switch (sortBy) {
+        case 'newest':  return new Date(b.created_at || 0) - new Date(a.created_at || 0)
+        case 'oldest':  return new Date(a.created_at || 0) - new Date(b.created_at || 0)
+        case 'name':    return nameA.localeCompare(nameB)
+        case 'objects': return (b.total_objects || 0) - (a.total_objects || 0)
+        default:        return 0
+      }
+    })
 
   const formatDate = (dt) => {
     if (!dt) return '—'
@@ -149,9 +163,53 @@ export default function ReportsPage() {
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
+
+          {/* Sort Dropdown */}
           <div className="relative">
             <button
-              onClick={() => setShowFilterMenu(prev => !prev)}
+              onClick={() => { setShowSortMenu(prev => !prev); setShowFilterMenu(false) }}
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-all cursor-pointer ${
+                sortBy !== 'newest'
+                  ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
+                  : 'bg-white/[0.03] text-[var(--text-secondary)] border-white/10 hover:border-white/20 hover:text-white'
+              }`}
+            >
+              <ArrowUpDown size={13} />
+              {sortOptions.find(o => o.value === sortBy)?.label || 'Sort'}
+            </button>
+            <AnimatePresence>
+              {showSortMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowSortMenu(false)} />
+                  <motion.div
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 6 }}
+                    className="absolute right-0 mt-2 w-44 bg-[#0b0f19] border border-cyan-500/20 rounded-xl shadow-2xl z-50 overflow-hidden"
+                  >
+                    {sortOptions.map(opt => (
+                      <button
+                        key={opt.value}
+                        onClick={() => { setSortBy(opt.value); setShowSortMenu(false) }}
+                        className={`w-full text-left px-4 py-2.5 text-xs transition-colors cursor-pointer ${
+                          sortBy === opt.value
+                            ? 'bg-cyan-500/10 text-cyan-400 font-semibold'
+                            : 'text-[var(--text-secondary)] hover:bg-white/[0.04] hover:text-white'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Filter Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => { setShowFilterMenu(prev => !prev); setShowSortMenu(false) }}
               className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-all cursor-pointer ${
                 activeFilter !== 'all'
                   ? 'bg-green-500/10 text-green-400 border-green-500/30'

@@ -203,10 +203,10 @@ export default function LiveFeedPage() {
       if (!streamUrl.trim()) { setError('Enter a stream URL first.'); setConnecting(false); return }
 
       if (protocol === 'mjpeg') {
-        setMjpegSrc(streamUrl)
         setIsMjpeg(true)
-        setConnected(true)
-        setConnecting(false)
+        setMjpegSrc(streamUrl)
+        // Don't set connected=true yet — wait for the <img> onLoad event.
+        // setConnecting stays true so the user sees "Connecting..."
       } else if (protocol === 'hls') {
         setIsMjpeg(false)
         const video = videoRef.current
@@ -306,7 +306,22 @@ export default function LiveFeedPage() {
             {isMjpeg && mjpegSrc && (
               <img ref={imgRef} src={mjpegSrc} alt="live"
                 className="absolute inset-0 w-full h-full object-contain"
-                style={{ transform: `rotate(${rotation}deg)`, transition: 'transform 0.3s' }}
+                style={{
+                  transform: `rotate(${rotation}deg)`,
+                  transition: 'transform 0.3s',
+                  display: connected ? 'block' : 'none',
+                }}
+                onLoad={() => {
+                  setConnected(true)
+                  setConnecting(false)
+                }}
+                onError={() => {
+                  setMjpegSrc('')
+                  setIsMjpeg(false)
+                  setConnected(false)
+                  setConnecting(false)
+                  setError('MJPEG stream failed. Check the URL is correct and the stream is running. Make sure you are on the same network as the camera.')
+                }}
               />
             )}
 

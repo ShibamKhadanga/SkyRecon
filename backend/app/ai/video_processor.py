@@ -829,9 +829,9 @@ def _correct_aerial_misclassification(
 # ── Per-category inference config ─────────────────────────────────────────────
 # People from aerial view need tuned confidence to balance recall vs false positives
 CATEGORY_SETTINGS: dict[str, dict] = {
-    # Aerial people: conf=0.25 catches edge/partial people, CLIP dedup handles duplicates.
+    # Aerial people: conf=0.20 catches edge/partial people, CLIP dedup handles duplicates.
     # fps=4 catches fast walkers, iou=0.40 tighter NMS
-    "people":             {"fps": 2, "conf": 0.25, "iou": 0.40},
+    "people":             {"fps": 4, "conf": 0.20, "iou": 0.40},
     # Vehicles are large from above — higher conf reduces road-marking false positives
     "vehicles":           {"fps": 1, "conf": 0.42, "iou": 0.50},
     "animals":            {"fps": 2, "conf": 0.20, "iou": 0.40},
@@ -867,7 +867,7 @@ MAX_SCREENSHOTS   = 8
 # overlapping crops of the full-resolution frame instead of downscaling.
 SAHI_CATEGORIES = {"people", "plants", "animals"}
 # Inference resolution override for small-object categories (default is 640)
-SMALL_OBJ_INFER_SIZE = 960
+SMALL_OBJ_INFER_SIZE = 960  # Balance: catches small people without being too slow on CPU
 
 
 def _run_sahi_tiled(
@@ -1133,6 +1133,11 @@ def run_mapping_analysis(
         raw_detection_count = 0
         last_progress = 0
 
+        # ── Per-frame people floor ──
+        # Track the max number of target-category objects detected in any single frame.
+        # This is a hard lower bound: if YOLO sees 7 people in one frame, there ARE ≥7.
+        max_objects_in_frame = 0
+
         def flush_batch():
             nonlocal raw_detection_count
             for det in batch:
@@ -1196,12 +1201,11 @@ def run_mapping_analysis(
                     )
                 return  # heuristic-only, skip YOLO for this category
 
-            # ── SAHI tiled inference ── DISABLED for CPU performance.
-            # Each SAHI pass adds 4 extra YOLO inferences per frame (~5x slower).
-            # The real accuracy fix was lowering MIN_DISPLAY_CONFIDENCE (0.75→0.35).
-            # Enable on GPU servers for maximum recall.
+            # ── SAHI tiled inference ── (DISABLED: causes overcounting due to
+            # duplicate detections from overlapping tiles. The 960px resolution
+            # is sufficient for small objects. Keep code for future use.)
             sahi_detections = None
-            # if cat_key in SAHI_CATEGORIES and w >= 1280:
+            # if cat_key in SAHI_CATEGORIES and w >= 1920:
             #     sahi_detections = _run_sahi_tiled(
             #         model, enhanced, conf_threshold, iou_threshold
             #     )
@@ -1230,6 +1234,7 @@ def run_mapping_analysis(
             # ── Phase 1: Collect all valid detections in this frame ──
             all_frame_objects = []   # ALL detected objects (for full-frame annotation)
             new_detections = []     # only NEW unique objects (for batch + CLIP dedup)
+            frame_target_count = 0  # count of target-category objects in THIS frame
 
             for result in results:
                 if result.boxes is None or len(result.boxes) == 0:
@@ -1241,10 +1246,8 @@ def run_mapping_analysis(
                     confidence = float(box.conf[0])
                     track_id   = int(box.id[0]) if box.id is not None else None
 
-                    # 75% confidence gate — only record high-confidence detections
-                    if confidence < settings.MIN_DISPLAY_CONFIDENCE:
-                        continue
-
+                    # Per-category YOLO conf (0.25 for people) already filters noise.
+                    # No secondary gate here — CLIP dedup handles false positives.
                     # Scale bbox to original resolution
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     x1o = x1 * (w / w_s); y1o = y1 * (h / h_s)
@@ -1282,6 +1285,7 @@ def run_mapping_analysis(
                         'x1': x1o, 'y1': y1o, 'x2': x2o, 'y2': y2o,
                         'cls_name': cls_name, 'conf': confidence, 'track_id': track_id,
                     })
+                    frame_target_count += 1
 
                     # ── Unique object dedup ──
                     grid_size = 40 if cat_key in ("people", "plants") else 50
@@ -1337,111 +1341,14 @@ def run_mapping_analysis(
                             'cat_id': cat_id, 'cls_id': cls_id,
                         })
 
-            # ── Merge SAHI detections not already covered by ByteTrack ──
-            if sahi_detections:
-                for sd in sahi_detections:
-                    sx1, sy1, sx2, sy2 = sd['x1'], sd['y1'], sd['x2'], sd['y2']
-                    s_cls_name = sd['cls_name']
-                    s_conf = sd['conf']
-
-                    if s_conf < settings.MIN_DISPLAY_CONFIDENCE:
-                        continue
-
-                    s_cls_name = _correct_aerial_misclassification(
-                        s_cls_name, sx1, sy1, sx2, sy2, target_cat
-                    )
-                    s_cls_id = sd['cls_id']
-                    if s_cls_name == "person":
-                        s_cls_id = next(
-                            (k for k, v in model.names.items() if v == "person"), s_cls_id
-                        )
-
-                    mapped_cat = YOLO_TO_CATEGORY.get(s_cls_name)
-                    if not mapped_cat:
-                        continue
-                    if detection_mode != "custom" and mapped_cat.lower() != target_cat.lower():
-                        continue
-
-                    cat_id = cat_cache.get(mapped_cat)
-                    if cat_id is None:
-                        continue
-
-                    # Check if this SAHI detection overlaps with any existing detection
-                    already_covered = False
-                    for existing in all_frame_objects:
-                        # Compute IoU
-                        ix1 = max(sx1, existing['x1'])
-                        iy1 = max(sy1, existing['y1'])
-                        ix2 = min(sx2, existing['x2'])
-                        iy2 = min(sy2, existing['y2'])
-                        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-                        area_s = (sx2 - sx1) * (sy2 - sy1)
-                        area_e = (existing['x2'] - existing['x1']) * (existing['y2'] - existing['y1'])
-                        union = area_s + area_e - inter
-                        if union > 0 and inter / union > 0.3:
-                            already_covered = True
-                            break
-                    if already_covered:
-                        continue
-
-                    # This SAHI detection is NEW — process it
-                    crop = None
-                    if 0 <= int(sx1) < w and 0 <= int(sy1) < h:
-                        crop = frame[
-                            max(0, int(sy1)):min(h, int(sy2)),
-                            max(0, int(sx1)):min(w, int(sx2)),
-                        ]
-                    if not _matches_characteristics(target_cat, characteristics, s_cls_name, crop):
-                        continue
-
-                    all_frame_objects.append({
-                        'x1': sx1, 'y1': sy1, 'x2': sx2, 'y2': sy2,
-                        'cls_name': s_cls_name, 'conf': s_conf, 'track_id': None,
-                    })
-
-                    # Unique object dedup (same as ByteTrack path)
-                    grid_size = 40 if cat_key in ("people", "plants") else 50
-                    spatial_key = (
-                        round((sx1 + sx2) / 2 / grid_size),
-                        round((sy1 + sy2) / 2 / grid_size),
-                        s_cls_id
-                    )
-                    obj_key = spatial_key  # SAHI has no track_id
-
-                    if spatial_key in spatial_index:
-                        existing_key = spatial_index[spatial_key]
-                        if existing_key != obj_key and existing_key in confirmed_ids:
-                            continue
-
-                    is_new = obj_key not in confirmed_ids
-                    if is_new:
-                        cx_new = (sx1 + sx2) / 2
-                        cy_new = (sy1 + sy2) / 2
-                        too_close = False
-                        for (cx_old, cy_old, old_cls) in confirmed_centers:
-                            if old_cls == s_cls_id:
-                                dist = ((cx_new - cx_old)**2 + (cy_new - cy_old)**2) ** 0.5
-                                if dist < DEDUP_RADIUS:
-                                    too_close = True
-                                    break
-                        if too_close:
-                            confirmed_ids.add(obj_key)
-                            continue
-
-                        confirmed_ids.add(obj_key)
-                        spatial_index[spatial_key] = obj_key
-                        first_seen_at[obj_key] = timestamp_sec
-                        confirmed_centers.append((cx_new, cy_new, s_cls_id))
-
-                        if crop is not None and crop.size > 0:
-                            crop_store[obj_key] = crop.copy()
-
-                        new_detections.append({
-                            'x1': sx1, 'y1': sy1, 'x2': sx2, 'y2': sy2,
-                            'cls_name': s_cls_name, 'conf': s_conf,
-                            'track_id': None, 'obj_key': obj_key,
-                            'cat_id': cat_id, 'cls_id': s_cls_id,
-                        })
+            # Update per-frame maximum (hard floor for final count)
+            nonlocal max_objects_in_frame
+            if frame_target_count > max_objects_in_frame:
+                max_objects_in_frame = frame_target_count
+                logger.info(
+                    f"[AI] New per-frame max: {frame_target_count} "
+                    f"{selected_category} in frame {frame_idx} (T={timestamp_sec:.1f}s)"
+                )
 
             # ── Phase 2: Full-frame screenshot with ALL detected objects ──
             if all_frame_objects:
@@ -1578,7 +1485,7 @@ def run_mapping_analysis(
                 # Pairwise comparison: merge visually similar detections
                 # RULE: NEVER merge two detections first seen at the same time
                 # (same frame = guaranteed different people)
-                VISUAL_SIM_THRESHOLD = 0.82
+                VISUAL_SIM_THRESHOLD = 0.88  # Raised: aerial crops look similar; avoid over-merging
                 SAME_FRAME_WINDOW = 1.5  # seconds — if first_seen within this, don't merge
                 merged_away = set()
                 for i in range(len(obj_keys_list)):
@@ -1627,6 +1534,17 @@ def run_mapping_analysis(
             unique_count = len(merged_centers) if merged_centers else len(confirmed_ids)
 
         processing_time = time.time() - start_time
+
+        # ── Per-frame floor: guarantee minimum count ──
+        # If YOLO detected more objects in a single frame than CLIP dedup kept,
+        # bump up to the per-frame maximum. This prevents over-merging.
+        if max_objects_in_frame > unique_count:
+            logger.info(
+                f"[AI] Per-frame floor: CLIP dedup gave {unique_count}, "
+                f"but max {max_objects_in_frame} detected in one frame. "
+                f"Using {max_objects_in_frame} as floor."
+            )
+            unique_count = max_objects_in_frame
 
         # ── Delete excess detection records from DB ──
         # During processing, all detections were flushed to the DB.
